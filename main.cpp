@@ -31,7 +31,6 @@ private:
     vk::raii::Context context;
     vk::raii::Instance instance = nullptr;
     vk::raii::SurfaceKHR surface = nullptr;
-    vk::raii::PhysicalDevice physicalDevice = nullptr;
     vk::raii::Device device = nullptr;
     vk::raii::Queue graphicsQueue = nullptr;
     vk::raii::SwapchainKHR swapChain = nullptr;
@@ -69,8 +68,8 @@ private:
     void initVulkan() {
         createInstance();
         createSurface();
-        pickPhysicalDevice();
-        createLogicalDevice();
+        const auto physDevice = pickPhysicalDevice();
+        createLogicalDevice(physDevice);
         createSwapChain();
         createImageViews();
         createCommandPool();
@@ -108,7 +107,7 @@ private:
         surface = vk::raii::SurfaceKHR{instance, rawSurface};
     }
 
-    void pickPhysicalDevice() {
+    vk::raii::PhysicalDevice pickPhysicalDevice() const {
         constexpr VpProfileProperties profileProp{
             .profileName = VP_KHR_ROADMAP_2022_NAME,
             .specVersion = VP_KHR_ROADMAP_2022_SPEC_VERSION
@@ -119,15 +118,14 @@ private:
             VkBool32 supported = VK_FALSE;
             if (vpGetPhysicalDeviceProfileSupport(*instance, *physDevice, &profileProp, &supported) == VK_SUCCESS &&
                 supported) {
-                physicalDevice = physDevice;
-                return;
+                return physDevice;
             }
         }
 
         throw std::runtime_error{"failed to find a physical device that supports the VP_KHR_roadmap_2022 profile!"};
     }
 
-    void createLogicalDevice() {
+    void createLogicalDevice(const vk::raii::PhysicalDevice &physDevice) {
         constexpr float queuePriority = 1.f;
         const vk::DeviceQueueCreateInfo queueCreateInfo{
             .queueFamilyIndex = 0,
@@ -150,7 +148,7 @@ private:
             .ppEnabledExtensionNames = deviceExtensions.data()
         };
 
-        device = vk::raii::Device{physicalDevice, createInfo};
+        device = vk::raii::Device{physDevice, createInfo};
         graphicsQueue = vk::raii::Queue{device, 0, 0};
     }
 
