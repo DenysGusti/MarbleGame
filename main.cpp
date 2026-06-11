@@ -1,9 +1,10 @@
 #include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_profiles.hpp>
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <vector>
 #include <array>
-#include <cstdint>
+#include <limits>
 
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
@@ -41,20 +42,28 @@ private:
     vk::Extent2D swapChainExtent;
 
     vk::raii::CommandPool commandPool = nullptr;
-    std::vector<vk::raii::CommandBuffer> commandBuffers;
+    vk::raii::CommandBuffers commandBuffers = nullptr;
 
     std::vector<vk::raii::Semaphore> imageAvailableSemaphores;
     std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
     std::vector<vk::raii::Fence> inFlightFences;
 
     std::uint32_t currentFrame = 0;
+    bool framebufferResized = false;
+
+    static void framebufferResizeCallback(GLFWwindow *window, std::int32_t width, std::int32_t height) {
+        const auto app = static_cast<MarbleGame *>(glfwGetWindowUserPointer(window));
+        app->framebufferResized = true;
+    }
 
     void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
         window = glfwCreateWindow(WIDTH, HEIGHT, "Marble Madness", nullptr, nullptr);
+        glfwSetWindowUserPointer(window, this);
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
 
     void initVulkan() {
@@ -100,7 +109,22 @@ private:
     }
 
     void pickPhysicalDevice() {
-        physicalDevice = instance.enumeratePhysicalDevices().front();
+        constexpr VpProfileProperties profileProp{
+            .profileName = VP_KHR_ROADMAP_2022_NAME,
+            .specVersion = VP_KHR_ROADMAP_2022_SPEC_VERSION
+        };
+
+        const auto physicalDevices = instance.enumeratePhysicalDevices();
+        for (const auto &physDevice: physicalDevices) {
+            VkBool32 supported = VK_FALSE;
+            if (vpGetPhysicalDeviceProfileSupport(*instance, *physDevice, &profileProp, &supported) == VK_SUCCESS &&
+                supported) {
+                physicalDevice = physDevice;
+                return;
+            }
+        }
+
+        throw std::runtime_error{"failed to find a physical device that supports the VP_KHR_roadmap_2022 profile!"};
     }
 
     void createLogicalDevice() {
@@ -113,8 +137,7 @@ private:
 
         const std::vector<const char *> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-        // FIX: In the Vulkan 1.3 Specification, synchronization2 appears before dynamicRendering
-        vk::PhysicalDeviceVulkan13Features vulkan13Features{
+        constexpr vk::PhysicalDeviceVulkan13Features vulkan13Features{
             .synchronization2 = vk::True,
             .dynamicRendering = vk::True
         };
@@ -151,7 +174,8 @@ private:
             .preTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity,
             .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
             .presentMode = vk::PresentModeKHR::eFifo,
-            .clipped = vk::True
+            .clipped = vk::True,
+            .oldSwapchain = *swapChain
         };
 
         swapChain = vk::raii::SwapchainKHR{device, createInfo};
@@ -205,6 +229,28 @@ private:
 
         // Presentation synchronization (Indexed by imageIndex!)
         for (std::size_t i = 0; i < swapChainImages.size(); ++i) {
+            renderFinishedSemaphores.emplace_back(device, semInfo);
+        }
+    }
+
+    void recreateSwapChain() {
+        std::int32_t width = 0;
+        std::int32_t height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+
+        device.waitIdle();
+
+        swapChainImageViews.clear();
+        createSwapChain();
+        createImageViews();
+
+        renderFinishedSemaphores.clear();
+        for (std::size_t i = 0; i < swapChainImages.size(); ++i) {
+            constexpr vk::SemaphoreCreateInfo semInfo{};
             renderFinishedSemaphores.emplace_back(device, semInfo);
         }
     }
@@ -293,12 +339,27 @@ private:
 
     void drawFrame() {
         [[maybe_unused]] const auto waitResult = device.waitForFences({*inFlightFences[currentFrame]}, VK_TRUE,
-                                                                      UINT64_MAX);
+                                                                      std::numeric_limits<std::uint64_t>::max());
 
         device.resetFences({*inFlightFences[currentFrame]});
 
-        const auto [result, imageIndex] = swapChain.acquireNextImage(
-            UINT64_MAX, *imageAvailableSemaphores[currentFrame], nullptr);
+        const auto [acquireResult, imageIndex] = [&] {
+            try {
+                const auto [result, idx] = swapChain.acquireNextImage(
+                    std::numeric_limits<std::uint64_t>::max(), *imageAvailableSemaphores[currentFrame], nullptr);
+                return std::make_pair(result, idx);
+            } catch ([[maybe_unused]] const vk::SystemError &err) {
+                return std::make_pair(vk::Result::eErrorOutOfDateKHR, std::uint32_t{0});
+            }
+        }();
+
+        if (acquireResult == vk::Result::eErrorOutOfDateKHR) {
+            recreateSwapChain();
+            return;
+        }
+        if (acquireResult != vk::Result::eSuccess && acquireResult != vk::Result::eSuboptimalKHR) {
+            throw std::runtime_error{"failed to acquire swap chain image!"};
+        }
 
         commandBuffers[currentFrame].reset();
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -329,7 +390,17 @@ private:
             .pImageIndices = &imageIndex
         };
 
-        [[maybe_unused]] const auto presentResult = graphicsQueue.presentKHR(presentInfo);
+        try {
+            const auto presentResult = graphicsQueue.presentKHR(presentInfo);
+            if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR ||
+                framebufferResized) {
+                framebufferResized = false;
+                recreateSwapChain();
+            }
+        } catch ([[maybe_unused]] const vk::SystemError &err) {
+            framebufferResized = false;
+            recreateSwapChain();
+        }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
