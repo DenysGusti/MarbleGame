@@ -11,11 +11,18 @@ constexpr std::uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 class MarbleGame {
 public:
+    ~MarbleGame() {
+        if (*device) {
+            device.waitIdle();
+        }
+        glfwDestroyWindow(window);
+        glfwTerminate();
+    }
+
     void run() {
         initWindow();
         initVulkan();
         mainLoop();
-        cleanup();
     }
 
 private:
@@ -46,7 +53,8 @@ private:
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-        window = glfwCreateWindow(WIDTH, HEIGHT, "Marble Madness - Modern Engine", nullptr, nullptr);
+        glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
+        window = glfwCreateWindow(WIDTH, HEIGHT, "Marble Madness", nullptr, nullptr);
     }
 
     void initVulkan() {
@@ -125,7 +133,11 @@ private:
 
     void createSwapChain() {
         swapChainImageFormat = vk::Format::eB8G8R8A8Srgb;
-        swapChainExtent = vk::Extent2D{WIDTH, HEIGHT};
+
+        std::int32_t width = 0;
+        std::int32_t height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        swapChainExtent = vk::Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
 
         const vk::SwapchainCreateInfoKHR createInfo{
             .surface = *surface,
@@ -280,8 +292,8 @@ private:
     }
 
     void drawFrame() {
-        const auto waitResult = device.waitForFences({*inFlightFences[currentFrame]}, VK_TRUE, UINT64_MAX);
-        (void) waitResult;
+        [[maybe_unused]] const auto waitResult = device.waitForFences({*inFlightFences[currentFrame]}, VK_TRUE,
+                                                                      UINT64_MAX);
 
         device.resetFences({*inFlightFences[currentFrame]});
 
@@ -291,7 +303,9 @@ private:
         commandBuffers[currentFrame].reset();
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
-        constexpr std::array<vk::PipelineStageFlags, 1> waitStages = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
+        constexpr std::array<vk::PipelineStageFlags, 1> waitStages = {
+            vk::PipelineStageFlagBits::eColorAttachmentOutput
+        };
 
         const vk::SubmitInfo submitInfo{
             .waitSemaphoreCount = 1,
@@ -315,8 +329,7 @@ private:
             .pImageIndices = &imageIndex
         };
 
-        const auto presentResult = graphicsQueue.presentKHR(presentInfo);
-        (void) presentResult;
+        [[maybe_unused]] const auto presentResult = graphicsQueue.presentKHR(presentInfo);
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -327,11 +340,6 @@ private:
             drawFrame();
         }
         device.waitIdle();
-    }
-
-    void cleanup() const {
-        glfwDestroyWindow(window);
-        glfwTerminate();
     }
 };
 
