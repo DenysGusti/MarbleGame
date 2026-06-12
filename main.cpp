@@ -8,7 +8,6 @@
 #include <chrono>
 #include <fstream>
 #include <string_view>
-#include <cstring>
 #include <utility>
 #include <algorithm>
 #include <glm/glm.hpp>
@@ -202,12 +201,12 @@ private:
         // Initialize ImGui backends
         ImGui_ImplGlfw_InitForVulkan(window, true);
 
-        static VkFormat colorFormat = (VkFormat) swapChainImageFormat;
+        static VkFormat colorFormat = static_cast<VkFormat>(swapChainImageFormat);
         VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &colorFormat,
-            .depthAttachmentFormat = (VkFormat) depthFormat
+            .depthAttachmentFormat = static_cast<VkFormat>(depthFormat)
         };
 
         ImGui_ImplVulkan_InitInfo initInfo = {};
@@ -462,8 +461,8 @@ private:
             }
         };
 
-        const auto bindingDescription = Vertex::getBindingDescription();
-        const auto attributeDescriptions = Vertex::getAttributeDescriptions();
+        constexpr auto bindingDescription = Vertex::getBindingDescription();
+        constexpr auto attributeDescriptions = Vertex::getAttributeDescriptions();
 
         const vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
             .vertexBindingDescriptionCount = 1,
@@ -582,7 +581,7 @@ private:
     }
 
     void createUniformBuffers() {
-        const vk::DeviceSize bufferSize = sizeof(CameraUBO);
+        constexpr vk::DeviceSize bufferSize = sizeof(CameraUBO);
 
         for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
             auto [buffer, memory] = createBuffer(
@@ -699,8 +698,8 @@ private:
 
         // Line Vertex Buffer (Static, Device-Local)
         {
-            const float lineLength = 0.015f;
-            const std::array<Vertex, 6> lineVertices = {
+            constexpr float lineLength = 0.015f;
+            constexpr std::array<Vertex, 6> lineVertices = {
                 // X-axis (Red)
                 Vertex{
                     .pos = glm::vec3(0.f), .normal = glm::vec3(0, 1, 0), .color = glm::vec3(1.f, 0.f, 0.f),
@@ -730,7 +729,7 @@ private:
                 }
             };
 
-            const vk::DeviceSize bufferSize = sizeof(Vertex) * lineVertices.size();
+            constexpr vk::DeviceSize bufferSize = sizeof(Vertex) * lineVertices.size();
             auto [stagingBuffer, stagingMemory] = createBuffer(
                 bufferSize,
                 vk::BufferUsageFlagBits::eTransferSrc,
@@ -1066,7 +1065,7 @@ private:
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
 
-        // Camera Look Controls (Mouse)
+        // Camera-Look Controls (Mouse)
         if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) {
             double xpos, ypos;
             glfwGetCursorPos(window, &xpos, &ypos);
