@@ -10,6 +10,7 @@
 #include <string_view>
 #include <cstring>
 #include <utility>
+#include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include "common.hpp"
@@ -107,6 +108,16 @@ private:
     std::uint32_t currentFrame = 0;
     bool framebufferResized = false;
 
+    // --- Camera State for Navigation ---
+    glm::vec3 cameraPos{0.f, 0.f, 4.f};
+    glm::vec3 cameraFront{0.f, 0.f, -1.f};
+    glm::vec3 cameraUp{0.f, 1.f, 0.f};
+    float yaw = -90.f;
+    float pitch = 0.f;
+    double lastX = 400.0;
+    double lastY = 300.0;
+    bool firstMouse = true;
+
     // --- Vulkan Resources for 3D Ball Rendering ---
     vk::raii::PhysicalDevice physicalDevice = nullptr;
     vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
@@ -144,6 +155,12 @@ private:
         window = glfwCreateWindow(WIDTH, HEIGHT, "Marble Madness", nullptr, nullptr);
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+
+        // Capture and disable the mouse cursor initially
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (glfwRawMouseMotionSupported()) {
+            glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+        }
     }
 
     void initVulkan() {
@@ -249,9 +266,24 @@ private:
         glfwGetFramebufferSize(window, &width, &height);
         swapChainExtent = vk::Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
 
+        // Query surface capabilities to ensure valid image count
+        const auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+
+        // Request minImageCount + 1 to enable triple buffering/smooth VSync,
+        // which prevents the frame rate from dropping to 30 FPS if a VSync deadline is slightly missed.
+        const std::uint32_t maxImages = (capabilities.maxImageCount > 0)
+                                            ? capabilities.maxImageCount
+                                            : std::numeric_limits<std::uint32_t>::max();
+        const std::uint32_t imageCount = std::clamp(capabilities.minImageCount + 1, capabilities.minImageCount,
+                                                    maxImages);
+
+        // Use eFifo for standard vertical sync (capped at display refresh rate, e.g. 60 FPS)
+        // support is guaranteed by the Vulkan specification.
+        vk::PresentModeKHR selectedPresentMode = vk::PresentModeKHR::eFifo;
+
         const vk::SwapchainCreateInfoKHR createInfo{
             .surface = *surface,
-            .minImageCount = 3,
+            .minImageCount = imageCount,
             .imageFormat = swapChainImageFormat,
             .imageColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
             .imageExtent = swapChainExtent,
@@ -260,7 +292,7 @@ private:
             .imageSharingMode = vk::SharingMode::eExclusive,
             .preTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity,
             .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-            .presentMode = vk::PresentModeKHR::eFifo,
+            .presentMode = selectedPresentMode,
             .clipped = vk::True,
             .oldSwapchain = *swapChain
         };
@@ -857,24 +889,80 @@ private:
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-    void updateUniformBuffer() const {
-        static auto startTime = std::chrono::high_resolution_clock::now();
-        const auto currentTime = std::chrono::high_resolution_clock::now();
-        const float time = std::chrono::duration<float>(currentTime - startTime).count();
+    void update(const float deltaTime) {
+        // Handle cursor capture toggles
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            firstMouse = true;
+        }
+        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
 
+        // Camera Look Controls (Mouse)
+        if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) {
+            double xpos, ypos;
+            glfwGetCursorPos(window, &xpos, &ypos);
+
+            if (firstMouse) {
+                lastX = xpos;
+                lastY = ypos;
+                firstMouse = false;
+            }
+
+            const float xoffset = static_cast<float>(xpos - lastX);
+            const float yoffset = static_cast<float>(lastY - ypos);
+            // Reversed since y-coordinates go from bottom to top
+            lastX = xpos;
+            lastY = ypos;
+
+            constexpr float mouseSensitivity = 0.1f;
+            yaw += xoffset * mouseSensitivity;
+            pitch += yoffset * mouseSensitivity;
+
+            // Constrain pitch rotation to prevent gimbal lock
+            pitch = std::clamp(pitch, -89.f, 89.f);
+        }
+
+        // Update direction vector
+        glm::vec3 front;
+        front.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+        front.y = std::sin(glm::radians(pitch));
+        front.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+        cameraFront = glm::normalize(front);
+
+        // Keyboard Controls for Movement: WASD & Space (Up) / Left Shift (Down)
+        constexpr float cameraSpeed = 2.5f;
+        const float velocity = cameraSpeed * deltaTime;
+
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            cameraPos += cameraFront * velocity;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            cameraPos -= cameraFront * velocity;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+            cameraPos += cameraUp * velocity;
+        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+            cameraPos -= cameraUp * velocity;
+    }
+
+    void updateUniformBuffer() const {
         const float aspect = static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height);
 
         // Perspective Projection Matrix: 45 degree vertical FOV, aspect ratio, near=0.1, far=10.0
         const glm::mat4 proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 10.f);
 
-        // View Matrix: Camera positioned at (0, 0, 4) looking at the center (0, 0, 0)
+        // View Matrix: Uses dynamic camera position and look direction
         const glm::mat4 view = glm::lookAt(
-            glm::vec3(0.f, 0.f, 4.f), // Camera position
-            glm::vec3(0.f, 0.f, 0.f), // Target position (ball is at 0, 0, 0)
-            glm::vec3(0.f, 1.f, 0.f) // Up vector
+            cameraPos,
+            cameraPos + cameraFront,
+            cameraUp
         );
 
-        // Model Matrix: Identity (no rotation, ball at 0, 0, 0)
+        // Model Matrix: Identity (no rotation, ball stationary at 0, 0, 0)
         constexpr glm::mat4 model = glm::mat4(1.f);
 
         CameraUBO ubo{};
@@ -888,8 +976,15 @@ private:
     }
 
     void mainLoop() {
+        auto lastTime = std::chrono::high_resolution_clock::now();
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+
+            const auto currentTime = std::chrono::high_resolution_clock::now();
+            const float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+            lastTime = currentTime;
+
+            update(deltaTime);
             drawFrame();
         }
         device.waitIdle();
@@ -1031,19 +1126,20 @@ private:
             }
         }
 
-        // Generate indices
+        // Generate indices with a CW winding in local space,
+        // which becomes CCW on screen after the negative viewport Y-flip.
         for (std::uint32_t r = 0; r < rings; ++r) {
             for (std::uint32_t s = 0; s < sectors; ++s) {
                 const std::uint32_t first = r * (sectors + 1) + s;
                 const std::uint32_t second = first + sectors + 1;
 
                 indices.push_back(first);
-                indices.push_back(second);
                 indices.push_back(first + 1);
+                indices.push_back(second);
 
                 indices.push_back(second);
-                indices.push_back(second + 1);
                 indices.push_back(first + 1);
+                indices.push_back(second + 1);
             }
         }
 
