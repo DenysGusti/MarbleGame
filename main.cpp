@@ -13,6 +13,9 @@
 #include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 #include "common.hpp"
 
 constexpr std::uint32_t WIDTH = 800;
@@ -74,6 +77,10 @@ public:
         if (*device) {
             device.waitIdle();
         }
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+
         glfwDestroyWindow(window);
         glfwTerminate();
     }
@@ -183,6 +190,41 @@ private:
         createGeometryBuffers();
         createCommandBuffers();
         createSyncObjects();
+        initImgui();
+    }
+
+    void initImgui() {
+        // Initialize ImGui context
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::StyleColorsDark();
+
+        // Initialize ImGui backends
+        ImGui_ImplGlfw_InitForVulkan(window, true);
+
+        static VkFormat colorFormat = (VkFormat) swapChainImageFormat;
+        VkPipelineRenderingCreateInfo renderingInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &colorFormat,
+            .depthAttachmentFormat = (VkFormat) depthFormat
+        };
+
+        ImGui_ImplVulkan_InitInfo initInfo = {};
+        initInfo.Instance = *instance;
+        initInfo.PhysicalDevice = *physicalDevice;
+        initInfo.Device = *device;
+        initInfo.QueueFamily = 0;
+        initInfo.Queue = *graphicsQueue;
+        initInfo.DescriptorPool = VK_NULL_HANDLE;
+        initInfo.DescriptorPoolSize = 100; // Let the backend create and manage its own pool
+        initInfo.MinImageCount = 3;
+        initInfo.ImageCount = static_cast<std::uint32_t>(swapChainImages.size());
+        initInfo.UseDynamicRendering = true;
+        initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = renderingInfo;
+        initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+        ImGui_ImplVulkan_Init(&initInfo);
     }
 
     void createInstance() {
@@ -887,6 +929,9 @@ private:
         commandBuffer.bindVertexBuffers(0, {*lineVertexBuffer}, {0});
         commandBuffer.draw(6, 1, 0, 0);
 
+        // Draw ImGui HUD overlay
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commandBuffer);
+
         commandBuffer.endRendering();
 
         const vk::ImageMemoryBarrier2 presentBarrier{
@@ -938,6 +983,34 @@ private:
         if (acquireResult != vk::Result::eSuccess && acquireResult != vk::Result::eSuboptimalKHR) {
             throw std::runtime_error{"failed to acquire swap chain image!"};
         }
+
+        // --- ImGui Frame Setup ---
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        // Wrap yaw to [0, 360) for a cleaner heading display
+        float displayYaw = std::fmod(yaw, 360.f);
+        if (displayYaw < 0.f) {
+            displayYaw += 360.f;
+        }
+
+        // Draw HUD window
+        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.35f); // Semi-transparent black background
+        ImGui::Begin("Minecraft HUD", nullptr,
+                     ImGuiWindowFlags_NoDecoration |
+                     ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav);
+
+        ImGui::Text("XYZ: %.3f / %.3f / %.3f", cameraPos.x, cameraPos.y, cameraPos.z);
+        ImGui::Text("Facing: %.1f / %.1f (Yaw / Pitch)", displayYaw, pitch);
+        ImGui::Text("Direction: (%.2f, %.2f, %.2f)", cameraFront.x, cameraFront.y, cameraFront.z);
+        ImGui::End();
+
+        ImGui::Render();
 
         updateUniformBuffer();
 
