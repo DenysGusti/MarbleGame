@@ -27,12 +27,17 @@ struct VertexOutput {
 VertexOutput vertexMain(VertexInput input) {
     VertexOutput output;
 
-    // Transform position to world space, then to view and projection space
-    float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
-    output.position = mul(ubo.proj, mul(ubo.view, worldPos));
-
-    // Transform normal to world space (using upper-left 3x3 of model matrix)
-    output.normal = mul((float3x3)ubo.model, input.normal);
+    // Apply standard projection to grayscale vertices (i.e. the sphere)
+    if (input.color.r == input.color.g && input.color.g == input.color.b) {
+        float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
+        output.position = mul(ubo.proj, mul(ubo.view, worldPos));
+        output.normal = mul((float3x3)ubo.model, input.normal);
+    } else {
+        // Debug lines projection: rotate to view space and offset in front of camera
+        float3 viewPos = mul((float3x3)ubo.view, input.position) + float3(0.0, 0.0, -0.5);
+        output.position = mul(ubo.proj, float4(viewPos, 1.0));
+        output.normal = input.normal;
+    }
     
     // Pass vertex color and texture coordinates
     output.color = input.color;
@@ -46,15 +51,20 @@ VertexOutput vertexMain(VertexInput input) {
 // ==========================================
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target {
-    // Read directional light direction from uniform buffer
-    float3 lightDir = normalize(ubo.lightDir.xyz);
-    float3 norm = normalize(input.normal);
+    float3 baseColor = input.color;
+    float diff = 1.0;
 
-    // Calculate diffuse lighting with an ambient base of 0.2
-    float diff = max(dot(norm, lightDir), 0.2);
+    // Apply lighting and UBO base color only to grayscale vertices (i.e. the sphere)
+    if (input.color.r == input.color.g && input.color.g == input.color.b) {
+        baseColor = input.color * ubo.baseColor.rgb;
+        
+        // Read directional light direction from uniform buffer
+        float3 lightDir = normalize(ubo.lightDir.xyz);
+        float3 norm = normalize(input.normal);
 
-    // Combine vertex color and uniform base color
-    float3 baseColor = input.color * ubo.baseColor.rgb;
+        // Calculate diffuse lighting with an ambient base of 0.2
+        diff = max(dot(norm, lightDir), 0.2);
+    }
 
     // Apply lighting to color
     float3 finalColor = baseColor * diff;

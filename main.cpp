@@ -123,6 +123,9 @@ private:
     vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
     vk::raii::PipelineLayout pipelineLayout = nullptr;
     vk::raii::Pipeline graphicsPipeline = nullptr;
+    vk::raii::Pipeline linePipeline = nullptr;
+    vk::raii::Buffer lineVertexBuffer = nullptr;
+    vk::raii::DeviceMemory lineVertexBufferMemory = nullptr;
 
     vk::Format depthFormat = vk::Format::eUndefined;
     vk::raii::Image depthImage = nullptr;
@@ -246,12 +249,20 @@ private:
             .dynamicRendering = vk::True
         };
 
+        // Enable wide lines if supported by physical device
+        const auto supportedFeatures = physicalDevice.getFeatures();
+        vk::PhysicalDeviceFeatures enabledFeatures{};
+        if (supportedFeatures.wideLines) {
+            enabledFeatures.wideLines = vk::True;
+        }
+
         const vk::DeviceCreateInfo createInfo{
             .pNext = &vulkan13Features,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queueCreateInfo,
             .enabledExtensionCount = static_cast<std::uint32_t>(deviceExtensions.size()),
-            .ppEnabledExtensionNames = deviceExtensions.data()
+            .ppEnabledExtensionNames = deviceExtensions.data(),
+            .pEnabledFeatures = &enabledFeatures
         };
 
         device = vk::raii::Device{physicalDevice, createInfo};
@@ -503,6 +514,29 @@ private:
         };
 
         graphicsPipeline = vk::raii::Pipeline{device, nullptr, pipelineInfo};
+
+        // Create the line graphics pipeline
+        vk::PipelineInputAssemblyStateCreateInfo lineInputAssembly{
+            .topology = vk::PrimitiveTopology::eLineList,
+            .primitiveRestartEnable = vk::False
+        };
+
+        // Disable face culling for lines and make them thicker
+        vk::PipelineRasterizationStateCreateInfo lineRasterizer = rasterizer;
+        lineRasterizer.cullMode = vk::CullModeFlagBits::eNone;
+        lineRasterizer.lineWidth = 3.f;
+
+        // Disable depth testing for debug lines so they draw on top of everything
+        vk::PipelineDepthStencilStateCreateInfo lineDepthStencil = depthStencil;
+        lineDepthStencil.depthTestEnable = vk::False;
+        lineDepthStencil.depthWriteEnable = vk::False;
+
+        vk::GraphicsPipelineCreateInfo linePipelineInfo = pipelineInfo;
+        linePipelineInfo.pInputAssemblyState = &lineInputAssembly;
+        linePipelineInfo.pRasterizationState = &lineRasterizer;
+        linePipelineInfo.pDepthStencilState = &lineDepthStencil;
+
+        linePipeline = vk::raii::Pipeline{device, nullptr, linePipelineInfo};
     }
 
     void createUniformBuffers() {
@@ -619,6 +653,61 @@ private:
             sphereIndexBufferMemory = std::move(iMemory);
 
             copyBuffer(stagingBuffer, sphereIndexBuffer, bufferSize);
+        }
+
+        // Line Vertex Buffer (Static, Device-Local)
+        {
+            const float lineLength = 0.015f;
+            const std::array<Vertex, 6> lineVertices = {
+                // X-axis (Red)
+                Vertex{
+                    .pos = glm::vec3(0.f), .normal = glm::vec3(0, 1, 0), .color = glm::vec3(1.f, 0.f, 0.f),
+                    .uv = glm::vec2(0.f)
+                },
+                Vertex{
+                    .pos = glm::vec3(lineLength, 0.f, 0.f), .normal = glm::vec3(0, 1, 0),
+                    .color = glm::vec3(1.f, 0.f, 0.f), .uv = glm::vec2(0.f)
+                },
+                // Y-axis (Green)
+                Vertex{
+                    .pos = glm::vec3(0.f), .normal = glm::vec3(0, 0, 1), .color = glm::vec3(0.f, 1.f, 0.f),
+                    .uv = glm::vec2(0.f)
+                },
+                Vertex{
+                    .pos = glm::vec3(0.f, lineLength, 0.f), .normal = glm::vec3(0, 0, 1),
+                    .color = glm::vec3(0.f, 1.f, 0.f), .uv = glm::vec2(0.f)
+                },
+                // Z-axis (Blue)
+                Vertex{
+                    .pos = glm::vec3(0.f), .normal = glm::vec3(1, 0, 0), .color = glm::vec3(0.f, 0.f, 1.f),
+                    .uv = glm::vec2(0.f)
+                },
+                Vertex{
+                    .pos = glm::vec3(0.f, 0.f, lineLength), .normal = glm::vec3(1, 0, 0),
+                    .color = glm::vec3(0.f, 0.f, 1.f), .uv = glm::vec2(0.f)
+                }
+            };
+
+            const vk::DeviceSize bufferSize = sizeof(Vertex) * lineVertices.size();
+            auto [stagingBuffer, stagingMemory] = createBuffer(
+                bufferSize,
+                vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+
+            void *data = stagingMemory.mapMemory(0, bufferSize);
+            std::memcpy(data, lineVertices.data(), bufferSize);
+            stagingMemory.unmapMemory();
+
+            auto [vBuffer, vMemory] = createBuffer(
+                bufferSize,
+                vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eDeviceLocal
+            );
+            lineVertexBuffer = std::move(vBuffer);
+            lineVertexBufferMemory = std::move(vMemory);
+
+            copyBuffer(stagingBuffer, lineVertexBuffer, bufferSize);
         }
     }
 
@@ -792,6 +881,11 @@ private:
         commandBuffer.bindVertexBuffers(0, {*sphereVertexBuffer}, {0});
         commandBuffer.bindIndexBuffer(*sphereIndexBuffer, 0, vk::IndexType::eUint32);
         commandBuffer.drawIndexed(sphereIndexCount, 1, 0, 0, 0);
+
+        // Draw debug lines at the center of the screen
+        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *linePipeline);
+        commandBuffer.bindVertexBuffers(0, {*lineVertexBuffer}, {0});
+        commandBuffer.draw(6, 1, 0, 0);
 
         commandBuffer.endRendering();
 
