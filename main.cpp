@@ -21,13 +21,8 @@
 
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
-constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+constexpr std::int32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-
-struct AppInfo {
-    bool profileSupported = false;
-    VpProfileProperties profile;
-};
 
 struct Vertex {
     glm::vec3 pos;
@@ -83,7 +78,6 @@ public:
 
 private:
     GLFWwindow *window = nullptr;
-    AppInfo appInfo = {};
 
     vk::raii::Context context;
     vk::raii::Instance instance = nullptr;
@@ -148,8 +142,8 @@ private:
         vk::KHRCreateRenderpass2ExtensionName
     };
 
-    static void framebufferResizeCallback(GLFWwindow *window, int width, int height) {
-        auto app = static_cast<MarbleGame *>(glfwGetWindowUserPointer(window));
+    static void framebufferResizeCallback(GLFWwindow *window, std::int32_t width, std::int32_t height) {
+        const auto app = static_cast<MarbleGame *>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
     }
 
@@ -197,7 +191,7 @@ private:
         ImGui_ImplGlfw_InitForVulkan(window, true);
 
         auto colorFormat = static_cast<VkFormat>(swapChainSurfaceFormat.format);
-        VkPipelineRenderingCreateInfo renderingInfo{
+        const VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &colorFormat,
@@ -246,7 +240,7 @@ private:
     void createSurface() {
         VkSurfaceKHR rawSurface = nullptr;
         if (glfwCreateWindowSurface(*instance, window, nullptr, &rawSurface) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create window surface!");
+            throw std::runtime_error{"failed to create window surface!"};
         }
         surface = vk::raii::SurfaceKHR{instance, rawSurface};
     }
@@ -285,30 +279,21 @@ private:
             return isDeviceSuitable(physDevice);
         });
         if (devIter == physicalDevices.end()) {
-            throw std::runtime_error("failed to find a suitable GPU!");
+            throw std::runtime_error{"failed to find a suitable GPU!"};
         }
         physicalDevice = *devIter;
 
-        VpProfileProperties profileProperties;
-        constexpr std::string_view profileName = VP_KHR_ROADMAP_2022_NAME;
-        std::copy_n(profileName.data(), profileName.size() + 1, profileProperties.profileName);
-        profileProperties.specVersion = VP_KHR_ROADMAP_2022_SPEC_VERSION;
+        constexpr VpProfileProperties profileProperties = {
+            VP_KHR_ROADMAP_2022_NAME,
+            VP_KHR_ROADMAP_2022_SPEC_VERSION
+        };
 
         VkBool32 supported = vk::False;
-        bool result = false;
+        const VkResult vk_result = vpGetPhysicalDeviceProfileSupport(*instance, *physicalDevice, &profileProperties,
+                                                                     &supported);
 
-        VkResult vk_result = vpGetPhysicalDeviceProfileSupport(*instance, *physicalDevice, &profileProperties,
-                                                               &supported);
-        result = vk_result == static_cast<int>(vk::Result::eSuccess);
-
-        const char *name = profileProperties.profileName;
-
-        if (result && supported == vk::True) {
-            appInfo.profileSupported = true;
-            appInfo.profile = profileProperties;
-            std::cout << "Device supports Vulkan profile: " << name << std::endl;
-        } else {
-            std::cout << "Device does not support Vulkan profile: " << name << std::endl;
+        if (static_cast<vk::Result>(vk_result) != vk::Result::eSuccess || supported != vk::True) {
+            throw std::runtime_error{"Roadmap 2022 profile is not supported on this device"};
         }
     }
 
@@ -316,53 +301,69 @@ private:
         std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
         for (std::uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) {
-            if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
+            if (queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics &&
                 physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
                 queueIndex = qfpIndex;
                 break;
             }
         }
         if (queueIndex == ~0) {
-            throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
+            throw std::runtime_error{"Could not find a queue for graphics and present -> terminating"};
         }
-
-        auto features = physicalDevice.getFeatures2();
-        vk::PhysicalDeviceVulkan13Features vulkan13Features;
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures;
-        vulkan13Features.dynamicRendering = vk::True;
-        vulkan13Features.synchronization2 = vk::True;
-        extendedDynamicStateFeatures.extendedDynamicState = vk::True;
-        vulkan13Features.pNext = &extendedDynamicStateFeatures;
-        features.pNext = &vulkan13Features;
 
         float queuePriority = 0.5f;
         vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
             .queueFamilyIndex = queueIndex, .queueCount = 1, .pQueuePriorities = &queuePriority
         };
+        vk::PhysicalDeviceFeatures deviceFeatures{};
+        deviceFeatures.wideLines = vk::True;
+
         vk::DeviceCreateInfo deviceCreateInfo{
-            .pNext = &features,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &deviceQueueCreateInfo,
             .enabledExtensionCount = static_cast<std::uint32_t>(requiredDeviceExtension.size()),
-            .ppEnabledExtensionNames = requiredDeviceExtension.data()
+            .ppEnabledExtensionNames = requiredDeviceExtension.data(),
+            .pEnabledFeatures = &deviceFeatures
         };
 
-        device = vk::raii::Device{physicalDevice, deviceCreateInfo};
+        VkDevice rawDevice = nullptr;
+        VkDeviceCreateInfo rawCreateInfo = deviceCreateInfo;
+
+        constexpr VpProfileProperties profileProperties = {
+            VP_KHR_ROADMAP_2022_NAME,
+            VP_KHR_ROADMAP_2022_SPEC_VERSION
+        };
+
+        VpDeviceCreateInfo vpCreateInfo{
+            .pCreateInfo = &rawCreateInfo,
+            .flags = 0,
+            .enabledFullProfileCount = 1,
+            .pEnabledFullProfiles = &profileProperties,
+            .enabledProfileBlockCount = 0,
+            .pEnabledProfileBlocks = nullptr
+        };
+
+        if (VkResult res = vpCreateDevice(*physicalDevice, &vpCreateInfo, nullptr, &rawDevice); res != VK_SUCCESS) {
+            throw std::runtime_error{"failed to create logical device via Vulkan profile!"};
+        }
+
+        device = vk::raii::Device{physicalDevice, rawDevice};
         queue = vk::raii::Queue{device, queueIndex, 0};
     }
 
     void createSwapChain() {
-        vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+        const vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
         swapChainExtent = chooseSwapExtent(surfaceCapabilities);
-        std::uint32_t minImageCount = chooseSwapMinImageCount(surfaceCapabilities);
+        const std::uint32_t minImageCount = chooseSwapMinImageCount(surfaceCapabilities);
 
-        std::vector<vk::SurfaceFormatKHR> availableFormats = physicalDevice.getSurfaceFormatsKHR(*surface);
+        const std::vector<vk::SurfaceFormatKHR> availableFormats = physicalDevice.getSurfaceFormatsKHR(*surface);
         swapChainSurfaceFormat = chooseSwapSurfaceFormat(availableFormats);
 
-        std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.getSurfacePresentModesKHR(*surface);
-        vk::PresentModeKHR presentMode = chooseSwapPresentMode(availablePresentModes);
+        const std::vector<vk::PresentModeKHR> availablePresentModes = physicalDevice.
+                getSurfacePresentModesKHR(*surface);
+        const vk::PresentModeKHR presentMode = chooseSwapPresentMode(availablePresentModes);
 
-        vk::SwapchainCreateInfoKHR swapChainCreateInfo{
+        const vk::SwapchainCreateInfoKHR swapChainCreateInfo{
             .surface = *surface,
             .minImageCount = minImageCount,
             .imageFormat = swapChainSurfaceFormat.format,
@@ -389,14 +390,14 @@ private:
             .format = swapChainSurfaceFormat.format,
             .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
         };
-        for (auto &image: swapChainImages) {
+        for (const auto &image: swapChainImages) {
             imageViewCreateInfo.image = image;
             swapChainImageViews.emplace_back(device, imageViewCreateInfo);
         }
     }
 
     void createDepthResources() {
-        vk::Format depthFormat = findDepthFormat();
+        const vk::Format depthFormat = findDepthFormat();
 
         createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, vk::ImageTiling::eOptimal,
                     vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -412,8 +413,9 @@ private:
         );
     }
 
-    [[nodiscard]] vk::Format findSupportedFormat(const std::vector<vk::Format> &candidates, vk::ImageTiling tiling,
-                                                 vk::FormatFeatureFlags features) const {
+    [[nodiscard]] vk::Format findSupportedFormat(const std::vector<vk::Format> &candidates,
+                                                 const vk::ImageTiling tiling,
+                                                 const vk::FormatFeatureFlags features) const {
         for (const auto format: candidates) {
             vk::FormatProperties props = physicalDevice.getFormatProperties(format);
 
@@ -424,7 +426,7 @@ private:
                 return format;
             }
         }
-        throw std::runtime_error("failed to find supported format!");
+        throw std::runtime_error{"failed to find supported format!"};
     }
 
     void createDescriptorSetLayout() {
@@ -602,7 +604,7 @@ private:
     }
 
     void createCommandPool() {
-        vk::CommandPoolCreateInfo poolInfo{
+        const vk::CommandPoolCreateInfo poolInfo{
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             .queueFamilyIndex = queueIndex
         };
@@ -654,7 +656,7 @@ private:
         // Line Vertex Buffer (Static, Device-Local)
         {
             constexpr float lineLength = 0.015f;
-            constexpr std::array<Vertex, 6> lineVertices = {
+            constexpr std::array lineVertices = {
                 // X-axis (Red)
                 Vertex{
                     .pos = glm::vec3(0.f), .normal = glm::vec3(0, 1, 0), .color = glm::vec3(1.f, 0.f, 0.f),
@@ -708,7 +710,7 @@ private:
         uniformBuffersMapped.clear();
 
         for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            vk::DeviceSize bufferSize = sizeof(CameraUBO);
+            constexpr vk::DeviceSize bufferSize = sizeof(CameraUBO);
             vk::raii::Buffer buffer{nullptr};
             vk::raii::DeviceMemory bufferMem{nullptr};
             createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer,
@@ -724,7 +726,7 @@ private:
         std::array poolSize{
             vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT)
         };
-        vk::DescriptorPoolCreateInfo poolInfo{
+        const vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
             .maxSets = MAX_FRAMES_IN_FLIGHT,
             .poolSizeCount = static_cast<std::uint32_t>(poolSize.size()),
@@ -734,8 +736,8 @@ private:
     }
 
     void createDescriptorSets() {
-        std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
-        vk::DescriptorSetAllocateInfo allocInfo{
+        std::vector layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
+        const vk::DescriptorSetAllocateInfo allocInfo{
             .descriptorPool = *descriptorPool,
             .descriptorSetCount = static_cast<std::uint32_t>(layouts.size()),
             .pSetLayouts = layouts.data()
@@ -763,7 +765,7 @@ private:
     }
 
     void createCommandBuffers() {
-        vk::CommandBufferAllocateInfo allocInfo{
+        const vk::CommandBufferAllocateInfo allocInfo{
             .commandPool = *commandPool,
             .level = vk::CommandBufferLevel::ePrimary,
             .commandBufferCount = MAX_FRAMES_IN_FLIGHT
@@ -790,7 +792,7 @@ private:
     }
 
     void recreateSwapChain() {
-        int width = 0, height = 0;
+        std::int32_t width{0}, height{0};
         glfwGetFramebufferSize(window, &width, &height);
         while (width == 0 || height == 0) {
             glfwGetFramebufferSize(window, &width, &height);
@@ -936,10 +938,10 @@ private:
     }
 
     void drawFrame() {
-        auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True,
-                                                std::numeric_limits<std::uint64_t>::max());
+        const auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True,
+                                                      std::numeric_limits<std::uint64_t>::max());
         if (fenceResult != vk::Result::eSuccess) {
-            throw std::runtime_error("failed to wait for fence!");
+            throw std::runtime_error{"failed to wait for fence!"};
         }
 
         auto [result, imageIndex] = swapChain.acquireNextImage(std::numeric_limits<std::uint64_t>::max(),
@@ -950,7 +952,7 @@ private:
             return;
         }
         if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
-            throw std::runtime_error("failed to acquire swap chain image!");
+            throw std::runtime_error{"failed to acquire swap chain image!"};
         }
 
         // ImGui Frame Setup
@@ -1027,7 +1029,8 @@ private:
         }
 
         if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) {
-            double xpos, ypos;
+            double xpos = 0.;
+            double ypos = 0.;
             glfwGetCursorPos(window, &xpos, &ypos);
 
             if (firstMouse) {
@@ -1048,7 +1051,7 @@ private:
             pitch = std::clamp(pitch, -89.f, 89.f);
         }
 
-        glm::vec3 front;
+        glm::vec3 front{0.f};
         front.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
         front.y = std::sin(glm::radians(pitch));
         front.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
@@ -1104,14 +1107,14 @@ private:
 
     static void transition_image_layout(
         const vk::raii::CommandBuffer &commandBuffer,
-        vk::Image image,
-        vk::ImageLayout old_layout,
-        vk::ImageLayout new_layout,
-        vk::AccessFlags2 src_access_mask,
-        vk::AccessFlags2 dst_access_mask,
-        vk::PipelineStageFlags2 src_stage_mask,
-        vk::PipelineStageFlags2 dst_stage_mask,
-        vk::ImageAspectFlags image_aspect_flags) {
+        const vk::Image image,
+        const vk::ImageLayout old_layout,
+        const vk::ImageLayout new_layout,
+        const vk::AccessFlags2 src_access_mask,
+        const vk::AccessFlags2 dst_access_mask,
+        const vk::PipelineStageFlags2 src_stage_mask,
+        const vk::PipelineStageFlags2 dst_stage_mask,
+        const vk::ImageAspectFlags image_aspect_flags) {
         vk::ImageMemoryBarrier2 barrier = {
             .srcStageMask = src_stage_mask,
             .srcAccessMask = src_access_mask,
@@ -1130,7 +1133,7 @@ private:
                 .layerCount = 1
             }
         };
-        vk::DependencyInfo dependency_info = {
+        const vk::DependencyInfo dependency_info = {
             .dependencyFlags = {},
             .imageMemoryBarrierCount = 1,
             .pImageMemoryBarriers = &barrier
@@ -1139,20 +1142,21 @@ private:
     }
 
     [[nodiscard]] std::uint32_t
-    findMemoryType(const std::uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {
-        vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
+    findMemoryType(const std::uint32_t typeFilter, const vk::MemoryPropertyFlags properties) const {
+        const vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
         for (std::uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
             if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
                 return i;
             }
         }
-        throw std::runtime_error("failed to find suitable memory type!");
+        throw std::runtime_error{"failed to find suitable memory type!"};
     }
 
-    void createImage(std::uint32_t width, std::uint32_t height, vk::Format format, vk::ImageTiling tiling,
-                     vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Image &image,
+    void createImage(const std::uint32_t width, const std::uint32_t height, const vk::Format format,
+                     const vk::ImageTiling tiling,
+                     const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties, vk::raii::Image &image,
                      vk::raii::DeviceMemory &imageMemory) const {
-        vk::ImageCreateInfo imageInfo{
+        const vk::ImageCreateInfo imageInfo{
             .imageType = vk::ImageType::e2D,
             .format = format,
             .extent = {width, height, 1},
@@ -1166,8 +1170,8 @@ private:
         };
         image = vk::raii::Image{device, imageInfo};
 
-        vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
-        vk::MemoryAllocateInfo allocInfo{
+        const vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
+        const vk::MemoryAllocateInfo allocInfo{
             .allocationSize = memRequirements.size,
             .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
         };
@@ -1176,8 +1180,8 @@ private:
     }
 
     [[nodiscard]] vk::raii::ImageView createImageView(const vk::raii::Image &image, const vk::Format format,
-                                        vk::ImageAspectFlags aspectFlags) const {
-        vk::ImageViewCreateInfo viewInfo{
+                                                      const vk::ImageAspectFlags aspectFlags) const {
+        const vk::ImageViewCreateInfo viewInfo{
             .image = *image,
             .viewType = vk::ImageViewType::e2D,
             .format = format,
@@ -1186,16 +1190,17 @@ private:
         return vk::raii::ImageView{device, viewInfo};
     }
 
-    void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties,
+    void createBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags usage,
+                      const vk::MemoryPropertyFlags properties,
                       vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory) const {
-        vk::BufferCreateInfo bufferInfo{
+        const vk::BufferCreateInfo bufferInfo{
             .size = size,
             .usage = usage,
             .sharingMode = vk::SharingMode::eExclusive
         };
         buffer = vk::raii::Buffer{device, bufferInfo};
-        vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
-        vk::MemoryAllocateInfo allocInfo{
+        const vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+        const vk::MemoryAllocateInfo allocInfo{
             .allocationSize = memRequirements.size,
             .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
         };
@@ -1205,7 +1210,7 @@ private:
 
     void copyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer,
                     const vk::DeviceSize size) const {
-        vk::CommandBufferAllocateInfo allocInfo{
+        const vk::CommandBufferAllocateInfo allocInfo{
             .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
         const vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
@@ -1249,7 +1254,8 @@ private:
         if (capabilities.currentExtent.width != std::numeric_limits<std::uint32_t>::max()) {
             return capabilities.currentExtent;
         }
-        int width, height;
+        std::int32_t width = 0;
+        std::int32_t height = 0;
         glfwGetFramebufferSize(window, &width, &height);
         return {
             std::clamp<std::uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
@@ -1319,7 +1325,7 @@ private:
             throw std::runtime_error{"failed to open file: " + std::string{filename}};
         }
 
-        const std::size_t fileSize = static_cast<std::size_t>(file.tellg());
+        const std::size_t fileSize = file.tellg();
         std::vector<char> buffer(fileSize);
         file.seekg(0);
         file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
