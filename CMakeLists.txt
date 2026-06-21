@@ -56,6 +56,7 @@ target_link_libraries(imgui PUBLIC glfw)
 
 # 3. Create the executable
 add_executable(MarbleGame main.cpp)
+target_include_directories(MarbleGame PRIVATE "C:/vcpkg/packages/stb_x64-windows/include")
 
 # 4. Link the necessary libraries
 target_link_libraries(MarbleGame PRIVATE
@@ -94,3 +95,17 @@ add_custom_command(
 
 add_custom_target(CompileAllShaders DEPENDS ${VERT_SPV} ${FRAG_SPV})
 add_dependencies(MarbleGame CompileAllShaders)
+
+# 7. Copy assets and shaders to the executable directory
+add_custom_command(TARGET MarbleGame POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/textures"
+        "$<TARGET_FILE_DIR:MarbleGame>/textures"
+)
+
+add_custom_command(TARGET MarbleGame POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        "${VERT_SPV}"
+        "${FRAG_SPV}"
+        "$<TARGET_FILE_DIR:MarbleGame>/"
+)

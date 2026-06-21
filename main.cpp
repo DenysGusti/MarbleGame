@@ -14,10 +14,14 @@
 #include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include "common.hpp"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
@@ -31,15 +35,15 @@ struct Vertex {
     glm::vec2 uv;
 
     static vk::VertexInputBindingDescription getBindingDescription() {
-        return vk::VertexInputBindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex);
+        return vk::VertexInputBindingDescription{0, sizeof(Vertex), vk::VertexInputRate::eVertex};
     }
 
     static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions() {
         return {
-            vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
-            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)),
-            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
-            vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv))
+            vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
+            vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
+            vk::VertexInputAttributeDescription{2, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)},
+            vk::VertexInputAttributeDescription{3, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)}
         };
     }
 };
@@ -110,6 +114,29 @@ private:
     vk::raii::Buffer lineVertexBuffer = nullptr;
     vk::raii::DeviceMemory lineVertexBufferMemory = nullptr;
 
+    vk::raii::Buffer planeVertexBuffer = nullptr;
+    vk::raii::DeviceMemory planeVertexBufferMemory = nullptr;
+    std::uint32_t planeIndexCount = 0;
+    vk::raii::Buffer planeIndexBuffer = nullptr;
+    vk::raii::DeviceMemory planeIndexBufferMemory = nullptr;
+
+    // --- Control and Physics State ---
+    bool ballControlMode = false;
+    glm::vec3 ballPos = glm::vec3(0.f, 2.f, 0.f);
+    glm::vec3 ballVel = glm::vec3(0.f);
+    glm::quat ballRot = glm::quat(1.f, 0.f, 0.f, 0.f);
+
+    // --- Textures State ---
+    vk::raii::Image ballTextureImage = nullptr;
+    vk::raii::DeviceMemory ballTextureImageMemory = nullptr;
+    vk::raii::ImageView ballTextureImageView = nullptr;
+
+    vk::raii::Image floorTextureImage = nullptr;
+    vk::raii::DeviceMemory floorTextureImageMemory = nullptr;
+    vk::raii::ImageView floorTextureImageView = nullptr;
+
+    vk::raii::Sampler textureSampler = nullptr;
+
     std::vector<vk::raii::Buffer> uniformBuffers;
     std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
     std::vector<void *> uniformBuffersMapped;
@@ -176,6 +203,8 @@ private:
         createCommandPool();
         createGeometryBuffers();
         createUniformBuffers();
+        createTextureImage();
+        createTextureSampler();
         createDescriptorPool();
         createDescriptorSets();
         createCommandBuffers();
@@ -317,6 +346,7 @@ private:
         };
         vk::PhysicalDeviceFeatures deviceFeatures{};
         deviceFeatures.wideLines = vk::True;
+        deviceFeatures.samplerAnisotropy = vk::True;
 
         vk::DeviceCreateInfo deviceCreateInfo{
             .queueCreateInfoCount = 1,
@@ -399,7 +429,7 @@ private:
     void createDepthResources() {
         const vk::Format depthFormat = findDepthFormat();
 
-        createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, vk::ImageTiling::eOptimal,
+        createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, vk::ImageTiling::eOptimal,
                     vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::MemoryPropertyFlagBits::eDeviceLocal,
                     depthImage, depthImageMemory);
         depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);
@@ -430,15 +460,29 @@ private:
     }
 
     void createDescriptorSetLayout() {
-        constexpr vk::DescriptorSetLayoutBinding uboLayoutBinding{
-            .binding = 0,
-            .descriptorType = vk::DescriptorType::eUniformBuffer,
-            .descriptorCount = 1,
-            .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
+        constexpr std::array bindings = {
+            vk::DescriptorSetLayoutBinding{
+                .binding = 0,
+                .descriptorType = vk::DescriptorType::eUniformBuffer,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
+            },
+            vk::DescriptorSetLayoutBinding{
+                .binding = 1,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eFragment
+            },
+            vk::DescriptorSetLayoutBinding{
+                .binding = 2,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eFragment
+            }
         };
         const vk::DescriptorSetLayoutCreateInfo layoutInfo{
-            .bindingCount = 1,
-            .pBindings = &uboLayoutBinding
+            .bindingCount = static_cast<std::uint32_t>(bindings.size()),
+            .pBindings = bindings.data()
         };
         descriptorSetLayout = vk::raii::DescriptorSetLayout{device, layoutInfo};
     }
@@ -532,8 +576,16 @@ private:
             .pDynamicStates = dynamicStates.data()
         };
 
+        vk::PushConstantRange pushConstantRange{
+            .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+            .offset = 0,
+            .size = sizeof(PushConstants)
+        };
         vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-            .setLayoutCount = 1, .pSetLayouts = &*descriptorSetLayout, .pushConstantRangeCount = 0
+            .setLayoutCount = 1,
+            .pSetLayouts = &*descriptorSetLayout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pushConstantRange
         };
         pipelineLayout = vk::raii::PipelineLayout{device, pipelineLayoutInfo};
 
@@ -618,18 +670,17 @@ private:
         // Vertex Buffer Allocation and Copy
         {
             const vk::DeviceSize bufferSize = sizeof(Vertex) * sphere.vertices.size();
-            vk::raii::Buffer stagingBuffer{nullptr};
-            vk::raii::DeviceMemory stagingMemory{nullptr};
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                         stagingBuffer, stagingMemory);
+            auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                               vk::MemoryPropertyFlagBits::eHostVisible |
+                                                               vk::MemoryPropertyFlagBits::eHostCoherent);
 
             auto *dest = static_cast<Vertex *>(stagingMemory.mapMemory(0, bufferSize));
             std::ranges::copy(sphere.vertices, dest);
             stagingMemory.unmapMemory();
 
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-                         vk::MemoryPropertyFlagBits::eDeviceLocal, sphereVertexBuffer, sphereVertexBufferMemory);
+            std::tie(sphereVertexBuffer, sphereVertexBufferMemory) = createBuffer(
+                bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eDeviceLocal);
 
             copyBuffer(stagingBuffer, sphereVertexBuffer, bufferSize);
         }
@@ -637,18 +688,17 @@ private:
         // Index Buffer Allocation and Copy
         {
             const vk::DeviceSize bufferSize = sizeof(std::uint32_t) * sphere.indices.size();
-            vk::raii::Buffer stagingBuffer{nullptr};
-            vk::raii::DeviceMemory stagingMemory{nullptr};
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                         stagingBuffer, stagingMemory);
+            auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                               vk::MemoryPropertyFlagBits::eHostVisible |
+                                                               vk::MemoryPropertyFlagBits::eHostCoherent);
 
             auto *dest = static_cast<std::uint32_t *>(stagingMemory.mapMemory(0, bufferSize));
             std::ranges::copy(sphere.indices, dest);
             stagingMemory.unmapMemory();
 
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-                         vk::MemoryPropertyFlagBits::eDeviceLocal, sphereIndexBuffer, sphereIndexBufferMemory);
+            std::tie(sphereIndexBuffer, sphereIndexBufferMemory) = createBuffer(
+                bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eDeviceLocal);
 
             copyBuffer(stagingBuffer, sphereIndexBuffer, bufferSize);
         }
@@ -687,20 +737,78 @@ private:
             };
 
             constexpr vk::DeviceSize bufferSize = sizeof(Vertex) * lineVertices.size();
-            vk::raii::Buffer stagingBuffer{nullptr};
-            vk::raii::DeviceMemory stagingMemory{nullptr};
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                         stagingBuffer, stagingMemory);
+            auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                               vk::MemoryPropertyFlagBits::eHostVisible |
+                                                               vk::MemoryPropertyFlagBits::eHostCoherent);
 
             auto *dest = static_cast<Vertex *>(stagingMemory.mapMemory(0, bufferSize));
             std::ranges::copy(lineVertices, dest);
             stagingMemory.unmapMemory();
 
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-                         vk::MemoryPropertyFlagBits::eDeviceLocal, lineVertexBuffer, lineVertexBufferMemory);
+            std::tie(lineVertexBuffer, lineVertexBufferMemory) = createBuffer(
+                bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                vk::MemoryPropertyFlagBits::eDeviceLocal);
 
             copyBuffer(stagingBuffer, lineVertexBuffer, bufferSize);
+        }
+
+        // Plane Geometry Allocation and Copy
+        {
+            float planeSize = 50.f;
+            float planeY = -1.f;
+            std::vector planeVertices = {
+                Vertex{
+                    .pos = glm::vec3(-planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(0.f, 0.f)
+                },
+                Vertex{
+                    .pos = glm::vec3(planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(planeSize, 0.f)
+                },
+                Vertex{
+                    .pos = glm::vec3(planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(planeSize, planeSize)
+                },
+                Vertex{
+                    .pos = glm::vec3(-planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(0.f, planeSize)
+                }
+            };
+            std::vector<std::uint32_t> planeIndices = {
+                0, 2, 1,
+                0, 3, 2
+            };
+            planeIndexCount = static_cast<std::uint32_t>(planeIndices.size());
+
+            // Vertex Buffer
+            {
+                const vk::DeviceSize bufferSize = sizeof(Vertex) * planeVertices.size();
+                auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                                   vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                   vk::MemoryPropertyFlagBits::eHostCoherent);
+                auto *dest = static_cast<Vertex *>(stagingMemory.mapMemory(0, bufferSize));
+                std::ranges::copy(planeVertices, dest);
+                stagingMemory.unmapMemory();
+                std::tie(planeVertexBuffer, planeVertexBufferMemory) = createBuffer(
+                    bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+                copyBuffer(stagingBuffer, planeVertexBuffer, bufferSize);
+            }
+
+            // Index Buffer
+            {
+                const vk::DeviceSize bufferSize = sizeof(std::uint32_t) * planeIndices.size();
+                auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                                   vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                   vk::MemoryPropertyFlagBits::eHostCoherent);
+                auto *dest = static_cast<std::uint32_t *>(stagingMemory.mapMemory(0, bufferSize));
+                std::ranges::copy(planeIndices, dest);
+                stagingMemory.unmapMemory();
+                std::tie(planeIndexBuffer, planeIndexBufferMemory) = createBuffer(
+                    bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+                copyBuffer(stagingBuffer, planeIndexBuffer, bufferSize);
+            }
         }
     }
 
@@ -711,26 +819,230 @@ private:
 
         for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             constexpr vk::DeviceSize bufferSize = sizeof(CameraUBO);
-            vk::raii::Buffer buffer{nullptr};
-            vk::raii::DeviceMemory bufferMem{nullptr};
-            createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer,
-                         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, buffer,
-                         bufferMem);
+            auto [buffer, bufferMem] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer,
+                                                    vk::MemoryPropertyFlagBits::eHostVisible |
+                                                    vk::MemoryPropertyFlagBits::eHostCoherent);
             uniformBuffers.emplace_back(std::move(buffer));
             uniformBuffersMemory.emplace_back(std::move(bufferMem));
             uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));
         }
     }
 
+    void createTexture(const std::string &filepath, vk::raii::Image &textureImage,
+                       vk::raii::DeviceMemory &textureImageMemory, vk::raii::ImageView &textureImageView) const {
+        int texWidth, texHeight, texChannels;
+        stbi_uc *pixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        if (!pixels) {
+            throw std::runtime_error{"failed to load texture image: " + filepath};
+        }
+        const vk::DeviceSize imageSize = texWidth * texHeight * 4;
+
+        auto [stagingBuffer, stagingMemory] = createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                           vk::MemoryPropertyFlagBits::eHostVisible |
+                                                           vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        void *data = stagingMemory.mapMemory(0, imageSize);
+        memcpy(data, pixels, imageSize);
+        stagingMemory.unmapMemory();
+
+        stbi_image_free(pixels);
+
+        const std::uint32_t mipLevels = static_cast<std::uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight))))
+                                        + 1;
+
+        createImage(texWidth, texHeight, mipLevels, vk::Format::eR8G8B8A8Srgb, vk::ImageTiling::eOptimal,
+                    vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst |
+                    vk::ImageUsageFlagBits::eSampled,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal, textureImage, textureImageMemory);
+
+        const vk::CommandBufferAllocateInfo allocInfo{
+            .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+        };
+        const vk::raii::CommandBuffer cmd = std::move(device.allocateCommandBuffers(allocInfo).front());
+        cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        transition_image_layout(cmd, *textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
+                                {}, vk::AccessFlagBits2::eTransferWrite,
+                                vk::PipelineStageFlagBits2::eTopOfPipe, vk::PipelineStageFlagBits2::eTransfer,
+                                vk::ImageAspectFlagBits::eColor, mipLevels);
+
+        const vk::BufferImageCopy region{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1
+            },
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1}
+        };
+        cmd.copyBufferToImage(*stagingBuffer, *textureImage, vk::ImageLayout::eTransferDstOptimal, region);
+
+        cmd.end();
+        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
+        queue.waitIdle();
+
+        generateMipmaps(*textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, mipLevels);
+
+        textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor,
+                                           mipLevels);
+    }
+
+    void generateMipmaps(const vk::Image image, const vk::Format imageFormat, const std::int32_t texWidth,
+                         const std::int32_t texHeight, const std::uint32_t mipLevels) const {
+        const vk::FormatProperties formatProperties = physicalDevice.getFormatProperties(imageFormat);
+        if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear)) {
+            throw std::runtime_error{"texture image format does not support linear blitting!"};
+        }
+
+        const vk::CommandBufferAllocateInfo allocInfo{
+            .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+        };
+        const vk::raii::CommandBuffer cmd = std::move(device.allocateCommandBuffers(allocInfo).front());
+        cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        std::int32_t mipWidth = texWidth;
+        std::int32_t mipHeight = texHeight;
+
+        for (std::uint32_t i = 1; i < mipLevels; i++) {
+            vk::ImageMemoryBarrier2 barrierSrc{
+                .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+                .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+                .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+                .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+                .image = image,
+                .subresourceRange = {
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .baseMipLevel = i - 1,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1
+                }
+            };
+            const vk::DependencyInfo depSrc = {
+                .dependencyFlags = {},
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers = &barrierSrc
+            };
+            cmd.pipelineBarrier2(depSrc);
+
+            const std::array<vk::Offset3D, 2> srcOffsets = {
+                vk::Offset3D{0, 0, 0},
+                vk::Offset3D{mipWidth, mipHeight, 1}
+            };
+            const std::array<vk::Offset3D, 2> dstOffsets = {
+                vk::Offset3D{0, 0, 0},
+                vk::Offset3D{mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1}
+            };
+            const vk::ImageBlit blit = {
+                .srcSubresource = {vk::ImageAspectFlagBits::eColor, i - 1, 0, 1},
+                .srcOffsets = srcOffsets,
+                .dstSubresource = {vk::ImageAspectFlagBits::eColor, i, 0, 1},
+                .dstOffsets = dstOffsets
+            };
+            cmd.blitImage(image, vk::ImageLayout::eTransferSrcOptimal, image, vk::ImageLayout::eTransferDstOptimal,
+                          {blit}, vk::Filter::eLinear);
+
+            vk::ImageMemoryBarrier2 barrierShader{
+                .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+                .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+                .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
+                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+                .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+                .image = image,
+                .subresourceRange = {
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .baseMipLevel = i - 1,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1
+                }
+            };
+            const vk::DependencyInfo depShader = {
+                .dependencyFlags = {},
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers = &barrierShader
+            };
+            cmd.pipelineBarrier2(depShader);
+
+            if (mipWidth > 1) mipWidth /= 2;
+            if (mipHeight > 1) mipHeight /= 2;
+        }
+
+        vk::ImageMemoryBarrier2 barrierFinal{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+            .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = mipLevels - 1,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        const vk::DependencyInfo depFinal = {
+            .dependencyFlags = {},
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &barrierFinal
+        };
+        cmd.pipelineBarrier2(depFinal);
+
+        cmd.end();
+        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
+        queue.waitIdle();
+    }
+
+    void createTextureImage() {
+        createTexture("textures/marble.jpg", ballTextureImage, ballTextureImageMemory, ballTextureImageView);
+        createTexture("textures/floor.jpg", floorTextureImage, floorTextureImageMemory, floorTextureImageView);
+    }
+
+    void createTextureSampler() {
+        const vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
+        const vk::SamplerCreateInfo samplerInfo{
+            .magFilter = vk::Filter::eLinear,
+            .minFilter = vk::Filter::eLinear,
+            .mipmapMode = vk::SamplerMipmapMode::eLinear,
+            .addressModeU = vk::SamplerAddressMode::eRepeat,
+            .addressModeV = vk::SamplerAddressMode::eRepeat,
+            .addressModeW = vk::SamplerAddressMode::eRepeat,
+            .mipLodBias = 0.0f,
+            .anisotropyEnable = vk::True,
+            .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+            .compareEnable = vk::False,
+            .compareOp = vk::CompareOp::eAlways,
+            .minLod = 0.0f,
+            .maxLod = 16.0f,
+            .borderColor = vk::BorderColor::eIntOpaqueBlack,
+            .unnormalizedCoordinates = vk::False
+        };
+        textureSampler = vk::raii::Sampler{device, samplerInfo};
+    }
+
     void createDescriptorPool() {
-        std::array poolSize{
-            vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT)
+        std::array poolSizes{
+            vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
+            vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 2}
         };
         const vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
             .maxSets = MAX_FRAMES_IN_FLIGHT,
-            .poolSizeCount = static_cast<std::uint32_t>(poolSize.size()),
-            .pPoolSizes = poolSize.data()
+            .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
+            .pPoolSizes = poolSizes.data()
         };
         descriptorPool = vk::raii::DescriptorPool{device, poolInfo};
     }
@@ -750,6 +1062,16 @@ private:
                 .offset = 0,
                 .range = sizeof(CameraUBO)
             };
+            vk::DescriptorImageInfo ballImageInfo{
+                .sampler = *textureSampler,
+                .imageView = *ballTextureImageView,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+            };
+            vk::DescriptorImageInfo floorImageInfo{
+                .sampler = *textureSampler,
+                .imageView = *floorTextureImageView,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+            };
             std::array descriptorWrites{
                 vk::WriteDescriptorSet{
                     .dstSet = *descriptorSets[i],
@@ -758,6 +1080,22 @@ private:
                     .descriptorCount = 1,
                     .descriptorType = vk::DescriptorType::eUniformBuffer,
                     .pBufferInfo = &bufferInfo
+                },
+                vk::WriteDescriptorSet{
+                    .dstSet = *descriptorSets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                    .pImageInfo = &ballImageInfo
+                },
+                vk::WriteDescriptorSet{
+                    .dstSet = *descriptorSets[i],
+                    .dstBinding = 2,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                    .pImageInfo = &floorImageInfo
                 }
             };
             device.updateDescriptorSets(descriptorWrites, {});
@@ -908,14 +1246,50 @@ private:
             nullptr
         );
 
-        commandBuffer.bindVertexBuffers(0, {*sphereVertexBuffer}, {0});
-        commandBuffer.bindIndexBuffer(*sphereIndexBuffer, 0, vk::IndexType::eUint32);
-        commandBuffer.drawIndexed(sphereIndexCount, 1, 0, 0, 0);
+        // Draw the plane
+        {
+            glm::mat4 planeModel = glm::mat4(1.0f);
+            PushConstants pcs{
+                .model = planeModel,
+                .textureIndex = TextureIndex::Floor
+            };
+            commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
+                                                       vk::ShaderStageFlagBits::eVertex |
+                                                       vk::ShaderStageFlagBits::eFragment, 0, pcs);
+            commandBuffer.bindVertexBuffers(0, {*planeVertexBuffer}, {0});
+            commandBuffer.bindIndexBuffer(*planeIndexBuffer, 0, vk::IndexType::eUint32);
+            commandBuffer.drawIndexed(planeIndexCount, 1, 0, 0, 0);
+        }
 
-        // Draw debug lines
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *linePipeline);
-        commandBuffer.bindVertexBuffers(0, {*lineVertexBuffer}, {0});
-        commandBuffer.draw(6, 1, 0, 0);
+        // Draw the sphere
+        {
+            glm::mat4 sphereModel = glm::translate(glm::mat4(1.0f), ballPos) * glm::mat4_cast(ballRot);
+            PushConstants pcs{
+                .model = sphereModel,
+                .textureIndex = TextureIndex::Ball
+            };
+            commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
+                                                       vk::ShaderStageFlagBits::eVertex |
+                                                       vk::ShaderStageFlagBits::eFragment, 0, pcs);
+            commandBuffer.bindVertexBuffers(0, {*sphereVertexBuffer}, {0});
+            commandBuffer.bindIndexBuffer(*sphereIndexBuffer, 0, vk::IndexType::eUint32);
+            commandBuffer.drawIndexed(sphereIndexCount, 1, 0, 0, 0);
+        }
+
+        // Draw debug lines (only in Fly Mode)
+        if (!ballControlMode) {
+            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *linePipeline);
+            glm::mat4 identity = glm::mat4(1.0f);
+            PushConstants pcs{
+                .model = identity,
+                .textureIndex = TextureIndex::None
+            };
+            commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
+                                                       vk::ShaderStageFlagBits::eVertex |
+                                                       vk::ShaderStageFlagBits::eFragment, 0, pcs);
+            commandBuffer.bindVertexBuffers(0, {*lineVertexBuffer}, {0});
+            commandBuffer.draw(6, 1, 0, 0);
+        }
 
         // ImGui overlay
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *commandBuffer);
@@ -967,16 +1341,24 @@ private:
 
         ImGui::SetNextWindowPos(ImVec2(10.f, 10.f), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.35f);
-        ImGui::Begin("Minecraft HUD", nullptr,
+        ImGui::Begin("HUD", nullptr,
                      ImGuiWindowFlags_NoDecoration |
                      ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_NoNav);
 
-        ImGui::Text("XYZ: %.3f / %.3f / %.3f", cameraPos.x, cameraPos.y, cameraPos.z);
+        if (!ballControlMode) {
+            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.f, 1.f), "MODE: FLY MODE [TAB to switch]");
+            ImGui::Text("Camera Pos: %.3f / %.3f / %.3f", cameraPos.x, cameraPos.y, cameraPos.z);
+            ImGui::Text("Controls: WASD=Fly, Mouse=Look, Space/LShift=Up/Down");
+        } else {
+            ImGui::TextColored(ImVec4(0.3f, 1.f, 0.4f, 1.f), "MODE: BALL CONTROL MODE [TAB to switch]");
+            ImGui::Text("Ball Pos: %.3f / %.3f / %.3f", ballPos.x, ballPos.y, ballPos.z);
+            ImGui::Text("Ball Speed: %.2f m/s", glm::length(glm::vec3(ballVel.x, 0.f, ballVel.z)));
+            ImGui::Text("Controls: WASD=Roll Ball, Mouse=Orbit Camera, Space=Jump");
+        }
         ImGui::Text("Facing: %.1f / %.1f (Yaw / Pitch)", displayYaw, pitch);
-        ImGui::Text("Direction: (%.2f, %.2f, %.2f)", cameraFront.x, cameraFront.y, cameraFront.z);
         ImGui::End();
 
         ImGui::Render();
@@ -1019,64 +1401,215 @@ private:
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-    void update(const float deltaTime) {
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            firstMouse = true;
+    void simulateBallPhysics(const float deltaTime, const glm::vec3 force = glm::vec3(0.f)) {
+        // Gravity
+        constexpr float gravity = -9.81f;
+        const glm::vec3 acc = force + glm::vec3(0.f, gravity, 0.f);
+
+        // Update velocity
+        ballVel += acc * deltaTime;
+
+        // Apply ground friction/damping on the ground
+        constexpr float planeY = -1.f;
+        constexpr float ballRadius = 1.f;
+        const bool onGround = (ballPos.y <= planeY + ballRadius + 0.001f);
+
+        if (onGround) {
+            // Apply ground friction (drag) to horizontal movement
+            constexpr float friction = 2.f;
+            ballVel.x -= ballVel.x * friction * deltaTime;
+            ballVel.z -= ballVel.z * friction * deltaTime;
+        } else {
+            // Air resistance
+            constexpr float airResistance = 0.1f;
+            ballVel -= ballVel * airResistance * deltaTime;
         }
-        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+
+        // Update position
+        ballPos += ballVel * deltaTime;
+
+        // Plane collision resolution
+        if (ballPos.y < planeY + ballRadius) {
+            ballPos.y = planeY + ballRadius;
+            // If dropping down, bounce
+            if (ballVel.y < 0.f) {
+                constexpr float restitution = 0.3f; // bounce factor
+                ballVel.y = -ballVel.y * restitution;
+                if (std::abs(ballVel.y) < 0.2f) {
+                    ballVel.y = 0.f;
+                }
+            }
+        }
+
+        // Keep ball within bounds of the plane
+        constexpr float planeBoundary = 24.5f; // plane is 50x50, so bounds from -25 to 25
+        if (ballPos.x < -planeBoundary) {
+            ballPos.x = -planeBoundary;
+            ballVel.x = -ballVel.x * 0.5f;
+        }
+        if (ballPos.x > planeBoundary) {
+            ballPos.x = planeBoundary;
+            ballVel.x = -ballVel.x * 0.5f;
+        }
+        if (ballPos.z < -planeBoundary) {
+            ballPos.z = -planeBoundary;
+            ballVel.z = -ballVel.z * 0.5f;
+        }
+        if (ballPos.z > planeBoundary) {
+            ballPos.z = planeBoundary;
+            ballVel.z = -ballVel.z * 0.5f;
+        }
+
+        // Update visual rotation based on rolling distance
+        if (onGround) {
+            const auto velocityOnGround = glm::vec3(ballVel.x, 0.f, ballVel.z);
+            const float speed = glm::length(velocityOnGround);
+            if (speed > 0.001f) {
+                const glm::vec3 rollDirection = glm::normalize(velocityOnGround);
+                // Rotation axis is perpendicular to roll direction and up vector (0, 1, 0)
+                const glm::vec3 rotAxis = glm::normalize(glm::cross(glm::vec3(0.f, 1.f, 0.f), rollDirection));
+                const float rotAngle = (speed * deltaTime) / ballRadius;
+                const glm::quat deltaRot = glm::angleAxis(rotAngle, rotAxis);
+                ballRot = deltaRot * ballRot;
+                ballRot = glm::normalize(ballRot);
+            }
+        }
+    }
+
+    void update(const float deltaTime) {
+        // Toggle control mode with TAB (prevent multiple triggers per keypress by tracking state)
+        static bool tabPressedLast = false;
+        const bool tabPressed = glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS;
+        if (tabPressed && !tabPressedLast) {
+            ballControlMode = !ballControlMode;
+            // Reset cursor state
+            firstMouse = true;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
+        tabPressedLast = tabPressed;
 
-        if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) {
-            double xpos = 0.;
-            double ypos = 0.;
-            glfwGetCursorPos(window, &xpos, &ypos);
-
-            if (firstMouse) {
-                lastX = xpos;
-                lastY = ypos;
-                firstMouse = false;
+        if (!ballControlMode) {
+            // --- FLY MODE INPUTS ---
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                firstMouse = true;
+            }
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             }
 
-            const auto xoffset = static_cast<float>(xpos - lastX);
-            const auto yoffset = static_cast<float>(lastY - ypos);
-            lastX = xpos;
-            lastY = ypos;
+            if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) {
+                double xpos = 0.;
+                double ypos = 0.;
+                glfwGetCursorPos(window, &xpos, &ypos);
 
-            constexpr float mouseSensitivity = 0.1f;
-            yaw += xoffset * mouseSensitivity;
-            pitch += yoffset * mouseSensitivity;
+                if (firstMouse) {
+                    lastX = xpos;
+                    lastY = ypos;
+                    firstMouse = false;
+                }
 
-            pitch = std::clamp(pitch, -89.f, 89.f);
+                const auto xoffset = static_cast<float>(xpos - lastX);
+                const auto yoffset = static_cast<float>(lastY - ypos);
+                lastX = xpos;
+                lastY = ypos;
+
+                constexpr float mouseSensitivity = 0.1f;
+                yaw += xoffset * mouseSensitivity;
+                pitch += yoffset * mouseSensitivity;
+
+                pitch = std::clamp(pitch, -89.f, 89.f);
+            }
+
+            glm::vec3 front{0.f};
+            front.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+            front.y = std::sin(glm::radians(pitch));
+            front.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+            cameraFront = glm::normalize(front);
+
+            constexpr float cameraSpeed = 2.5f;
+            const float velocity = cameraSpeed * deltaTime;
+
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+                cameraPos += cameraFront * velocity;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                cameraPos -= cameraFront * velocity;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+            if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+                cameraPos += cameraUp * velocity;
+            if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+                cameraPos -= cameraUp * velocity;
+
+            // Simulate ball physics passively in fly mode
+            simulateBallPhysics(deltaTime);
+        } else {
+            // --- BALL CONTROL MODE ---
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                firstMouse = true;
+            }
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            }
+
+            if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) {
+                double xpos = 0.;
+                double ypos = 0.;
+                glfwGetCursorPos(window, &xpos, &ypos);
+
+                if (firstMouse) {
+                    lastX = xpos;
+                    lastY = ypos;
+                    firstMouse = false;
+                }
+
+                const auto xoffset = static_cast<float>(xpos - lastX);
+                const auto yoffset = static_cast<float>(lastY - ypos);
+                lastX = xpos;
+                lastY = ypos;
+
+                constexpr float mouseSensitivity = 0.1f;
+                yaw += xoffset * mouseSensitivity;
+                pitch += yoffset * mouseSensitivity;
+                pitch = std::clamp(pitch, -89.f, 89.f);
+            }
+
+            glm::vec3 front{0.f};
+            front.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+            front.y = std::sin(glm::radians(pitch));
+            front.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+            cameraFront = glm::normalize(front);
+
+            // Control ball with WASD relative to camera rotation on the horizontal plane
+            glm::vec3 ballForce{0.f};
+            const glm::vec3 flatForward = glm::normalize(glm::vec3(cameraFront.x, 0.f, cameraFront.z));
+            const glm::vec3 flatRight = glm::normalize(glm::cross(flatForward, glm::vec3(0.f, 1.f, 0.f)));
+
+            constexpr float forceMagnitude = 20.f; // force applied to move the ball
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+                ballForce += flatForward * forceMagnitude;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                ballForce -= flatForward * forceMagnitude;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                ballForce -= flatRight * forceMagnitude;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                ballForce += flatRight * forceMagnitude;
+
+
+            simulateBallPhysics(deltaTime, ballForce);
+
+            // Third-person camera follow
+            constexpr float followDistance = 6.f;
+            cameraPos = ballPos - cameraFront * followDistance;
         }
-
-        glm::vec3 front{0.f};
-        front.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
-        front.y = std::sin(glm::radians(pitch));
-        front.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
-        cameraFront = glm::normalize(front);
-
-        constexpr float cameraSpeed = 2.5f;
-        const float velocity = cameraSpeed * deltaTime;
-
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-            cameraPos += cameraFront * velocity;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-            cameraPos -= cameraFront * velocity;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-            cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-            cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
-        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-            cameraPos += cameraUp * velocity;
-        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
-            cameraPos -= cameraUp * velocity;
     }
 
     void updateUniformBuffer() const {
         const float aspect = static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height);
-        const glm::mat4 proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 10.f);
+        const glm::mat4 proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 100.f);
         const glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
         constexpr glm::mat4 model = glm::mat4{1.f};
 
@@ -1114,7 +1647,8 @@ private:
         const vk::AccessFlags2 dst_access_mask,
         const vk::PipelineStageFlags2 src_stage_mask,
         const vk::PipelineStageFlags2 dst_stage_mask,
-        const vk::ImageAspectFlags image_aspect_flags) {
+        const vk::ImageAspectFlags image_aspect_flags,
+        const std::uint32_t level_count = 1) {
         vk::ImageMemoryBarrier2 barrier = {
             .srcStageMask = src_stage_mask,
             .srcAccessMask = src_access_mask,
@@ -1128,7 +1662,7 @@ private:
             .subresourceRange = {
                 .aspectMask = image_aspect_flags,
                 .baseMipLevel = 0,
-                .levelCount = 1,
+                .levelCount = level_count,
                 .baseArrayLayer = 0,
                 .layerCount = 1
             }
@@ -1152,7 +1686,8 @@ private:
         throw std::runtime_error{"failed to find suitable memory type!"};
     }
 
-    void createImage(const std::uint32_t width, const std::uint32_t height, const vk::Format format,
+    void createImage(const std::uint32_t width, const std::uint32_t height, const std::uint32_t mipLevels,
+                     const vk::Format format,
                      const vk::ImageTiling tiling,
                      const vk::ImageUsageFlags usage, const vk::MemoryPropertyFlags properties, vk::raii::Image &image,
                      vk::raii::DeviceMemory &imageMemory) const {
@@ -1160,7 +1695,7 @@ private:
             .imageType = vk::ImageType::e2D,
             .format = format,
             .extent = {width, height, 1},
-            .mipLevels = 1,
+            .mipLevels = mipLevels,
             .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1,
             .tiling = tiling,
@@ -1180,32 +1715,34 @@ private:
     }
 
     [[nodiscard]] vk::raii::ImageView createImageView(const vk::raii::Image &image, const vk::Format format,
-                                                      const vk::ImageAspectFlags aspectFlags) const {
+                                                      const vk::ImageAspectFlags aspectFlags,
+                                                      const std::uint32_t mipLevels = 1) const {
         const vk::ImageViewCreateInfo viewInfo{
             .image = *image,
             .viewType = vk::ImageViewType::e2D,
             .format = format,
-            .subresourceRange = {aspectFlags, 0, 1, 0, 1}
+            .subresourceRange = {aspectFlags, 0, mipLevels, 0, 1}
         };
         return vk::raii::ImageView{device, viewInfo};
     }
 
-    void createBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags usage,
-                      const vk::MemoryPropertyFlags properties,
-                      vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory) const {
+    [[nodiscard]] std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(
+        const vk::DeviceSize size, const vk::BufferUsageFlags usage,
+        const vk::MemoryPropertyFlags properties) const {
         const vk::BufferCreateInfo bufferInfo{
             .size = size,
             .usage = usage,
             .sharingMode = vk::SharingMode::eExclusive
         };
-        buffer = vk::raii::Buffer{device, bufferInfo};
+        vk::raii::Buffer buffer{device, bufferInfo};
         const vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
         const vk::MemoryAllocateInfo allocInfo{
             .allocationSize = memRequirements.size,
             .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
         };
-        bufferMemory = vk::raii::DeviceMemory{device, allocInfo};
+        vk::raii::DeviceMemory bufferMemory{device, allocInfo};
         buffer.bindMemory(*bufferMemory, 0);
+        return {std::move(buffer), std::move(bufferMemory)};
     }
 
     void copyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer,

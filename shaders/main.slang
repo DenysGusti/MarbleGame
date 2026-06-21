@@ -4,6 +4,16 @@
 [[vk::binding(0, 0)]]
 ConstantBuffer<CameraUBO> ubo;
 
+// Declare push constants
+[[vk::push_constant]]
+PushConstants pcs;
+
+// Texture bindings (combined image samplers)
+[[vk::binding(1, 0)]]
+Sampler2D ballTex;
+[[vk::binding(2, 0)]]
+Sampler2D floorTex;
+
 // 2. Vertex Input matching the C++ Vertex struct
 struct VertexInput {
   float3 position : POSITION;
@@ -28,14 +38,14 @@ struct VertexOutput {
 VertexOutput vertexMain(VertexInput input) {
   VertexOutput output;
 
-  // Apply standard projection to grayscale vertices (i.e. the sphere)
-  if (input.color.r == input.color.g && input.color.g == input.color.b) {
-    float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
+  // Use textureIndex to determine if it is a debug line or geometry
+  if (pcs.textureIndex != TextureIndex::None) {
+    float4 worldPos = mul(pcs.model, float4(input.position, 1.0));
     float4 viewPos4 = mul(ubo.view, worldPos);
     output.position = mul(ubo.proj, viewPos4);
     output.viewPos = viewPos4.xyz;
     output.normal =
-        mul((float3x3)ubo.view, mul((float3x3)ubo.model, input.normal));
+        mul((float3x3)ubo.view, mul((float3x3)pcs.model, input.normal));
   } else {
     // Debug lines projection: rotate to view space and offset in front of
     // camera
@@ -59,13 +69,17 @@ VertexOutput vertexMain(VertexInput input) {
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target {
   float3 baseColor = input.color;
+
+  if (pcs.textureIndex == TextureIndex::Ball) {
+    baseColor = ballTex.Sample(input.uv).rgb;
+  } else if (pcs.textureIndex == TextureIndex::Floor) {
+    baseColor = floorTex.Sample(input.uv).rgb;
+  }
+
   float3 finalColor = baseColor;
 
-  // Apply lighting and UBO base color only to grayscale vertices (i.e. the
-  // sphere)
-  if (input.color.r == input.color.g && input.color.g == input.color.b) {
-    baseColor = input.color * ubo.baseColor.rgb;
-
+  // Apply lighting and specular highlights only to textured geometry
+  if (pcs.textureIndex != TextureIndex::None) {
     // Read directional light direction from uniform buffer and transform to
     // view space
     float3 lightDirView = normalize(mul((float3x3)ubo.view, ubo.lightDir.xyz));
