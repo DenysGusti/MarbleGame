@@ -6,18 +6,19 @@ ConstantBuffer<CameraUBO> ubo;
 
 // 2. Vertex Input matching the C++ Vertex struct
 struct VertexInput {
-    float3 position : POSITION;
-    float3 normal   : NORMAL;
-    float3 color    : COLOR;
-    float2 uv       : TEXCOORD;
+  float3 position : POSITION;
+  float3 normal : NORMAL;
+  float3 color : COLOR;
+  float2 uv : TEXCOORD;
 };
 
 // 3. Data passed from Vertex Shader to Fragment Shader
 struct VertexOutput {
-    float4 position : SV_Position;
-    float3 normal   : NORMAL;
-    float3 color    : COLOR;
-    float2 uv       : TEXCOORD;
+  float4 position : SV_Position;
+  float3 normal : NORMAL;
+  float3 viewPos : VIEW_POS;
+  float3 color : COLOR;
+  float2 uv : TEXCOORD;
 };
 
 // ==========================================
@@ -25,25 +26,31 @@ struct VertexOutput {
 // ==========================================
 [shader("vertex")]
 VertexOutput vertexMain(VertexInput input) {
-    VertexOutput output;
+  VertexOutput output;
 
-    // Apply standard projection to grayscale vertices (i.e. the sphere)
-    if (input.color.r == input.color.g && input.color.g == input.color.b) {
-        float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
-        output.position = mul(ubo.proj, mul(ubo.view, worldPos));
-        output.normal = mul((float3x3)ubo.model, input.normal);
-    } else {
-        // Debug lines projection: rotate to view space and offset in front of camera
-        float3 viewPos = mul((float3x3)ubo.view, input.position) + float3(0.0, 0.0, -0.5);
-        output.position = mul(ubo.proj, float4(viewPos, 1.0));
-        output.normal = input.normal;
-    }
-    
-    // Pass vertex color and texture coordinates
-    output.color = input.color;
-    output.uv = input.uv;
+  // Apply standard projection to grayscale vertices (i.e. the sphere)
+  if (input.color.r == input.color.g && input.color.g == input.color.b) {
+    float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
+    float4 viewPos4 = mul(ubo.view, worldPos);
+    output.position = mul(ubo.proj, viewPos4);
+    output.viewPos = viewPos4.xyz;
+    output.normal =
+        mul((float3x3)ubo.view, mul((float3x3)ubo.model, input.normal));
+  } else {
+    // Debug lines projection: rotate to view space and offset in front of
+    // camera
+    float3 viewPos =
+        mul((float3x3)ubo.view, input.position) + float3(0.0, 0.0, -0.5);
+    output.position = mul(ubo.proj, float4(viewPos, 1.0));
+    output.viewPos = viewPos;
+    output.normal = input.normal;
+  }
 
-    return output;
+  // Pass vertex color and texture coordinates
+  output.color = input.color;
+  output.uv = input.uv;
+
+  return output;
 }
 
 // ==========================================
@@ -51,23 +58,36 @@ VertexOutput vertexMain(VertexInput input) {
 // ==========================================
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target {
-    float3 baseColor = input.color;
-    float diff = 1.0;
+  float3 baseColor = input.color;
+  float3 finalColor = baseColor;
 
-    // Apply lighting and UBO base color only to grayscale vertices (i.e. the sphere)
-    if (input.color.r == input.color.g && input.color.g == input.color.b) {
-        baseColor = input.color * ubo.baseColor.rgb;
-        
-        // Read directional light direction from uniform buffer
-        float3 lightDir = normalize(ubo.lightDir.xyz);
-        float3 norm = normalize(input.normal);
+  // Apply lighting and UBO base color only to grayscale vertices (i.e. the
+  // sphere)
+  if (input.color.r == input.color.g && input.color.g == input.color.b) {
+    baseColor = input.color * ubo.baseColor.rgb;
 
-        // Calculate diffuse lighting with an ambient base of 0.2
-        diff = max(dot(norm, lightDir), 0.2);
-    }
+    // Read directional light direction from uniform buffer and transform to
+    // view space
+    float3 lightDirView = normalize(mul((float3x3)ubo.view, ubo.lightDir.xyz));
+    float3 norm = normalize(input.normal);
 
-    // Apply lighting to color
-    float3 finalColor = baseColor * diff;
+    // Calculate diffuse lighting
+    float diff = max(dot(norm, lightDirView), 0.0);
+    float3 diffuseColor = diff * baseColor;
 
-    return float4(finalColor, 1.0);
+    // Calculate ambient lighting (ambient base of 0.2)
+    float3 ambientColor = 0.2 * baseColor;
+
+    // Calculate specular lighting (Blinn-Phong)
+    float3 viewDir = normalize(-input.viewPos);
+    float3 halfDir = normalize(lightDirView + viewDir);
+    float spec = pow(max(dot(norm, halfDir), 0.0), 32.0);
+    float3 specularColor =
+        0.5 * spec *
+        float3(1.0, 1.0, 1.0); // specular strength = 0.5, white highlight
+
+    finalColor = ambientColor + diffuseColor + specularColor;
+  }
+
+  return float4(finalColor, 1.0);
 }
