@@ -29,6 +29,7 @@
 #include "vertex.hpp"
 #include "instance_data.hpp"
 #include "material.hpp"
+#include "mesh_component.hpp"
 
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
