@@ -26,6 +26,9 @@
 #include "entity.hpp"
 #include "transform_component.hpp"
 #include "camera_component.hpp"
+#include "vertex.hpp"
+#include "instance_data.hpp"
+#include "material.hpp"
 
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
