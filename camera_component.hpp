@@ -37,8 +37,8 @@ private:
     glm::vec3 target = {0.0f, 0.0f, 0.0f};
     glm::vec3 up = {0.0f, 1.0f, 0.0f};
 
-    mutable glm::mat4 viewMatrix = glm::mat4(1.0f);
-    mutable glm::mat4 projectionMatrix = glm::mat4(1.0f);
+    mutable glm::mat4 viewMatrix = glm::mat4{1.0f};
+    mutable glm::mat4 projectionMatrix = glm::mat4{1.0f};
     mutable bool viewMatrixDirty = true;
     mutable bool projectionMatrixDirty = true;
 
@@ -112,7 +112,7 @@ public:
         viewMatrixDirty = true;
     }
 
-    void lookAt(const glm::vec3 &targetPosition, const glm::vec3 &upVector = glm::vec3(0.0f, 1.0f, 0.0f)) {
+    void lookAt(const glm::vec3 &targetPosition, const glm::vec3 &upVector = glm::vec3{0.0f, 1.0f, 0.0f}) {
         target = targetPosition;
         up = upVector;
         viewMatrixDirty = true;
@@ -142,7 +142,7 @@ public:
     [[nodiscard]] glm::vec3 getPosition() const {
         const auto *ownerPtr = getOwner();
         const auto *transform = ownerPtr ? ownerPtr->getComponent<TransformComponent>() : nullptr;
-        return transform ? transform->getPosition() : glm::vec3(0.0f, 0.0f, 0.0f);
+        return transform ? transform->getPosition() : glm::vec3{0.0f, 0.0f, 0.0f};
     }
 
     [[nodiscard]] const glm::vec3 &getTarget() const {
@@ -171,12 +171,12 @@ private:
             lastPosition = position;
             lastRotation = euler;
 
-            const glm::quat qx = glm::angleAxis(euler.x, glm::vec3(1.0f, 0.0f, 0.0f));
-            const glm::quat qy = glm::angleAxis(euler.y, glm::vec3(0.0f, 1.0f, 0.0f));
-            const glm::quat qz = glm::angleAxis(euler.z, glm::vec3(0.0f, 0.0f, 1.0f));
+            const glm::quat qx = glm::angleAxis(euler.x, glm::vec3{1.0f, 0.0f, 0.0f});
+            const glm::quat qy = glm::angleAxis(euler.y, glm::vec3{0.0f, 1.0f, 0.0f});
+            const glm::quat qz = glm::angleAxis(euler.z, glm::vec3{0.0f, 0.0f, 1.0f});
             const glm::quat q = qz * qy * qx; // match TransformComponent's ZYX composition
 
-            const glm::mat4 T = glm::translate(glm::mat4(1.0f), position);
+            const glm::mat4 T = glm::translate(glm::mat4{1.0f}, position);
             const glm::mat4 R = glm::mat4_cast(q);
             const glm::mat4 worldNoScale = T * R;
 
@@ -184,9 +184,9 @@ private:
         } else {
             // Fallback: default camera at origin looking towards +Z with Y up
             // Note: keep consistent with right-handed convention used elsewhere
-            constexpr glm::vec3 position(0.0f);
-            constexpr glm::vec3 forward(0.0f, 0.0f, 1.0f);
-            constexpr glm::vec3 upVec(0.0f, 1.0f, 0.0f);
+            constexpr glm::vec3 position = {0.0f, 0.0f, 0.0f};
+            constexpr glm::vec3 forward = {0.0f, 0.0f, 1.0f};
+            constexpr glm::vec3 upVec = {0.0f, 1.0f, 0.0f};
             viewMatrix = glm::lookAt(position, position + forward, upVec);
         }
         viewMatrixDirty = false;

@@ -27,14 +27,10 @@
 #include "transform_component.hpp"
 #include "camera_component.hpp"
 #include "vertex.hpp"
-#include "instance_data.hpp"
-#include "material.hpp"
-#include "mesh_component.hpp"
 
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
 constexpr std::int32_t MAX_FRAMES_IN_FLIGHT = 2;
-
 
 
 struct GeometryData {
@@ -109,11 +105,28 @@ private:
     vk::raii::Buffer planeIndexBuffer = nullptr;
     vk::raii::DeviceMemory planeIndexBufferMemory = nullptr;
 
+    vk::raii::Buffer boxVertexBuffer = nullptr;
+    vk::raii::DeviceMemory boxVertexBufferMemory = nullptr;
+    std::uint32_t boxIndexCount = 0;
+    vk::raii::Buffer boxIndexBuffer = nullptr;
+    vk::raii::DeviceMemory boxIndexBufferMemory = nullptr;
+
+    struct Platform {
+        glm::vec3 position;
+        glm::vec3 size;
+        glm::vec3 rotation; // Euler angles in radians
+        bool isGoal = false;
+        std::string name;
+    };
+
+    std::vector<Platform> platforms;
+    bool hasWon = false;
+
     // --- Control and Physics State ---
-    bool ballControlMode = false;
-    glm::vec3 ballPos = glm::vec3(0.f, 2.f, 0.f);
-    glm::vec3 ballVel = glm::vec3(0.f);
-    glm::quat ballRot = glm::quat(1.f, 0.f, 0.f, 0.f);
+    bool ballControlMode = true;
+    glm::vec3 ballPos = glm::vec3{0.f, 2.f, 0.f};
+    glm::vec3 ballVel = glm::vec3{0.f};
+    glm::quat ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
 
     // --- Textures State ---
     vk::raii::Image ballTextureImage = nullptr;
@@ -160,24 +173,87 @@ private:
 
     void initEntities() {
         cameraEntity = std::make_unique<Entity>("Camera");
-        auto* cameraTransform = cameraEntity->addComponent<TransformComponent>();
+        auto *cameraTransform = cameraEntity->addComponent<TransformComponent>();
         cameraTransform->setPosition(cameraPos);
-        cameraTransform->setRotation(glm::vec3(glm::radians(pitch), -glm::radians(yaw + 90.f), 0.f));
-        
-        auto* cameraComp = cameraEntity->addComponent<CameraComponent>();
+        cameraTransform->setRotation(glm::vec3{glm::radians(pitch), -glm::radians(yaw + 90.f), 0.f});
+
+        auto *cameraComp = cameraEntity->addComponent<CameraComponent>();
         cameraComp->setFieldOfView(45.0f);
-        cameraComp->setAspectRatio(static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height));
+        cameraComp->setAspectRatio(
+            static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height));
         cameraComp->setClipPlanes(0.1f, 100.0f);
         cameraComp->initialize();
 
         ballEntity = std::make_unique<Entity>("Ball");
-        auto* ballTransform = ballEntity->addComponent<TransformComponent>();
+        auto *ballTransform = ballEntity->addComponent<TransformComponent>();
         ballTransform->setPosition(ballPos);
         ballTransform->setRotation(glm::eulerAngles(ballRot));
 
-        floorEntity = std::make_unique<Entity>("Floor");
-        auto* floorTransform = floorEntity->addComponent<TransformComponent>();
-        floorTransform->setPosition(glm::vec3(0.f, 0.f, 0.f));
+        // Create platforms
+        platforms.clear();
+        hasWon = false;
+
+        // Platform 1: Start Platform (size: 8x1x8 at origin)
+        platforms.push_back({
+            .position = glm::vec3{0.f, -0.5f, 0.f},
+            .size = glm::vec3{8.f, 1.f, 8.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Start Platform"
+        });
+
+        // Platform 2: Straight narrow bridge (size: 3x1x12 at (0, -0.5, 10))
+        platforms.push_back({
+            .position = glm::vec3{0.f, -0.5f, 10.f},
+            .size = glm::vec3{3.f, 1.f, 12.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Narrow Bridge"
+        });
+
+        // Platform 3: Upward Ramp (rising 3 units over 12 units along Z)
+        // angle = atan(3/12) = 14.03 degrees = 0.245 radians.
+        // center position: Z = 16 + 6 = 22, Y = -0.5 + 1.5 = 1.0
+        platforms.push_back({
+            .position = glm::vec3{0.f, 1.0f, 22.f},
+            .size = glm::vec3{4.f, 1.f, 12.f},
+            .rotation = glm::vec3{-glm::radians(14.03f), 0.f, 0.f},
+            .name = "Upward Ramp"
+        });
+
+        // Platform 4: Intermediate Landing (size: 10x1x10 at (0, 2.5, 33))
+        platforms.push_back({
+            .position = glm::vec3{0.f, 2.5f, 33.f},
+            .size = glm::vec3{10.f, 1.f, 10.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Intermediate Landing"
+        });
+
+        // Platform 5: Right turned path (size: 12x1x3 at (11, 2.5, 33))
+        platforms.push_back({
+            .position = glm::vec3{11.f, 2.5f, 33.f},
+            .size = glm::vec3{12.f, 1.f, 3.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Right Turn Bridge"
+        });
+
+        // Platform 6: Side-tilted ramp / slope (size: 4x1x16 along X, rising from X=17 to X=33, tilted)
+        // angle = atan(3/16) = 10.6 degrees = 0.185 radians.
+        // rotation is roll (Z rotation) = -10.6 degrees.
+        // center: X = 17 + 8 = 25, Y = 2.5 + 1.5 = 4.0
+        platforms.push_back({
+            .position = glm::vec3{25.f, 4.0f, 33.f},
+            .size = glm::vec3{16.f, 1.f, 4.f},
+            .rotation = glm::vec3{0.f, 0.f, glm::radians(10.6f)},
+            .name = "Tilted Slope"
+        });
+
+        // Platform 7: Final platform with Goal (size: 10x1x10 at (38, 5.5, 33))
+        platforms.push_back({
+            .position = glm::vec3{38.f, 5.5f, 33.f},
+            .size = glm::vec3{10.f, 1.f, 10.f},
+            .rotation = glm::vec3{0.f},
+            .isGoal = true,
+            .name = "Goal Platform"
+        });
     }
 
     std::vector<const char *> requiredDeviceExtension = {
@@ -726,30 +802,30 @@ private:
             constexpr std::array lineVertices = {
                 // X-axis (Red)
                 Vertex{
-                    .position = glm::vec3(0.f), .normal = glm::vec3(0, 1, 0),
-                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(1.f, 0.f, 0.f, 1.f)
+                    .position = glm::vec3{0.f}, .normal = glm::vec3{0, 1, 0},
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4{1.f, 0.f, 0.f, 1.f}
                 },
                 Vertex{
-                    .position = glm::vec3(lineLength, 0.f, 0.f), .normal = glm::vec3(0, 1, 0),
-                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(1.f, 0.f, 0.f, 1.f)
+                    .position = glm::vec3{lineLength, 0.f, 0.f}, .normal = glm::vec3{0, 1, 0},
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4{1.f, 0.f, 0.f, 1.f}
                 },
                 // Y-axis (Green)
                 Vertex{
-                    .position = glm::vec3(0.f), .normal = glm::vec3(0, 0, 1),
-                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 1.f, 0.f, 1.f)
+                    .position = glm::vec3{0.f}, .normal = glm::vec3{0, 0, 1},
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4{0.f, 1.f, 0.f, 1.f}
                 },
                 Vertex{
-                    .position = glm::vec3(0.f, lineLength, 0.f), .normal = glm::vec3(0, 0, 1),
-                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 1.f, 0.f, 1.f)
+                    .position = glm::vec3{0.f, lineLength, 0.f}, .normal = glm::vec3{0, 0, 1},
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4{0.f, 1.f, 0.f, 1.f}
                 },
                 // Z-axis (Blue)
                 Vertex{
-                    .position = glm::vec3(0.f), .normal = glm::vec3(1, 0, 0),
-                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 0.f, 1.f, 1.f)
+                    .position = glm::vec3{0.f}, .normal = glm::vec3{1, 0, 0},
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4{0.f, 0.f, 1.f, 1.f}
                 },
                 Vertex{
-                    .position = glm::vec3(0.f, 0.f, lineLength), .normal = glm::vec3(1, 0, 0),
-                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 0.f, 1.f, 1.f)
+                    .position = glm::vec3{0.f, 0.f, lineLength}, .normal = glm::vec3{1, 0, 0},
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4{0.f, 0.f, 1.f, 1.f}
                 }
             };
 
@@ -775,20 +851,20 @@ private:
             float planeY = -1.f;
             std::vector planeVertices = {
                 Vertex{
-                    .position = glm::vec3(-planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .texCoord = glm::vec2(0.f, 0.f), .tangent = glm::vec4(0.f)
+                    .position = glm::vec3{-planeSize, planeY, -planeSize}, .normal = glm::vec3{0.f, 1.f, 0.f},
+                    .texCoord = glm::vec2(0.f, 0.f), .tangent = glm::vec4{0.f}
                 },
                 Vertex{
-                    .position = glm::vec3(planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .texCoord = glm::vec2(planeSize, 0.f), .tangent = glm::vec4(0.f)
+                    .position = glm::vec3{planeSize, planeY, -planeSize}, .normal = glm::vec3{0.f, 1.f, 0.f},
+                    .texCoord = glm::vec2(planeSize, 0.f), .tangent = glm::vec4{0.f}
                 },
                 Vertex{
-                    .position = glm::vec3(planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .texCoord = glm::vec2(planeSize, planeSize), .tangent = glm::vec4(0.f)
+                    .position = glm::vec3{planeSize, planeY, planeSize}, .normal = glm::vec3{0.f, 1.f, 0.f},
+                    .texCoord = glm::vec2(planeSize, planeSize), .tangent = glm::vec4{0.f}
                 },
                 Vertex{
-                    .position = glm::vec3(-planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .texCoord = glm::vec2(0.f, planeSize), .tangent = glm::vec4(0.f)
+                    .position = glm::vec3{-planeSize, planeY, planeSize}, .normal = glm::vec3{0.f, 1.f, 0.f},
+                    .texCoord = glm::vec2(0.f, planeSize), .tangent = glm::vec4{0.f}
                 }
             };
             std::vector<std::uint32_t> planeIndices = {
@@ -825,6 +901,42 @@ private:
                     bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
                     vk::MemoryPropertyFlagBits::eDeviceLocal);
                 copyBuffer(stagingBuffer, planeIndexBuffer, bufferSize);
+            }
+        }
+
+        // Box Geometry Allocation and Copy
+        {
+            const GeometryData box = createBoxGeometry();
+            boxIndexCount = static_cast<std::uint32_t>(box.indices.size());
+
+            // Box Vertex Buffer
+            {
+                const vk::DeviceSize bufferSize = sizeof(Vertex) * box.vertices.size();
+                auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                                   vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                   vk::MemoryPropertyFlagBits::eHostCoherent);
+                auto *dest = static_cast<Vertex *>(stagingMemory.mapMemory(0, bufferSize));
+                std::ranges::copy(box.vertices, dest);
+                stagingMemory.unmapMemory();
+                std::tie(boxVertexBuffer, boxVertexBufferMemory) = createBuffer(
+                    bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+                copyBuffer(stagingBuffer, boxVertexBuffer, bufferSize);
+            }
+
+            // Box Index Buffer
+            {
+                const vk::DeviceSize bufferSize = sizeof(std::uint32_t) * box.indices.size();
+                auto [stagingBuffer, stagingMemory] = createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                                                                   vk::MemoryPropertyFlagBits::eHostVisible |
+                                                                   vk::MemoryPropertyFlagBits::eHostCoherent);
+                auto *dest = static_cast<std::uint32_t *>(stagingMemory.mapMemory(0, bufferSize));
+                std::ranges::copy(box.indices, dest);
+                stagingMemory.unmapMemory();
+                std::tie(boxIndexBuffer, boxIndexBufferMemory) = createBuffer(
+                    bufferSize, vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+                copyBuffer(stagingBuffer, boxIndexBuffer, bufferSize);
             }
         }
     }
@@ -1263,41 +1375,43 @@ private:
             nullptr
         );
 
-        // Draw the plane
-        {
-            glm::mat4 planeModel;
-            if (floorEntity) {
-                if (auto* floorTransform = floorEntity->getComponent<TransformComponent>()) {
-                    planeModel = floorTransform->getModelMatrix();
-                } else {
-                    planeModel = glm::mat4(1.0f);
-                }
-            } else {
-                planeModel = glm::mat4(1.0f);
-            }
+        // Draw the platforms
+        for (const auto &platform: platforms) {
+            glm::mat4 T = glm::translate(glm::mat4{1.0f}, platform.position);
+
+            glm::quat qx = glm::angleAxis(platform.rotation.x, glm::vec3{1.0f, 0.0f, 0.0f});
+            glm::quat qy = glm::angleAxis(platform.rotation.y, glm::vec3{0.0f, 1.0f, 0.0f});
+            glm::quat qz = glm::angleAxis(platform.rotation.z, glm::vec3{0.0f, 0.0f, 1.0f});
+            glm::quat q = qz * qy * qx;
+            glm::mat4 R = glm::mat4_cast(q);
+
+            glm::mat4 S = glm::scale(glm::mat4{1.0f}, platform.size);
+
+            glm::mat4 modelMatrix = T * R * S;
+
             PushConstants pcs{
-                .model = planeModel,
-                .textureIndex = TextureIndex::Floor
+                .model = modelMatrix,
+                .textureIndex = platform.isGoal ? TextureIndex::Ball : TextureIndex::Floor
             };
             commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
                                                        vk::ShaderStageFlagBits::eVertex |
                                                        vk::ShaderStageFlagBits::eFragment, 0, pcs);
-            commandBuffer.bindVertexBuffers(0, {*planeVertexBuffer}, {0});
-            commandBuffer.bindIndexBuffer(*planeIndexBuffer, 0, vk::IndexType::eUint32);
-            commandBuffer.drawIndexed(planeIndexCount, 1, 0, 0, 0);
+            commandBuffer.bindVertexBuffers(0, {*boxVertexBuffer}, {0});
+            commandBuffer.bindIndexBuffer(*boxIndexBuffer, 0, vk::IndexType::eUint32);
+            commandBuffer.drawIndexed(boxIndexCount, 1, 0, 0, 0);
         }
 
         // Draw the sphere
         {
             glm::mat4 sphereModel;
             if (ballEntity) {
-                if (auto* ballTransform = ballEntity->getComponent<TransformComponent>()) {
+                if (auto *ballTransform = ballEntity->getComponent<TransformComponent>()) {
                     sphereModel = ballTransform->getModelMatrix();
                 } else {
-                    sphereModel = glm::translate(glm::mat4(1.0f), ballPos) * glm::mat4_cast(ballRot);
+                    sphereModel = glm::translate(glm::mat4{1.0f}, ballPos) * glm::mat4_cast(ballRot);
                 }
             } else {
-                sphereModel = glm::translate(glm::mat4(1.0f), ballPos) * glm::mat4_cast(ballRot);
+                sphereModel = glm::translate(glm::mat4{1.0f}, ballPos) * glm::mat4_cast(ballRot);
             }
             PushConstants pcs{
                 .model = sphereModel,
@@ -1314,7 +1428,7 @@ private:
         // Draw debug lines (only in Fly Mode)
         if (!ballControlMode) {
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *linePipeline);
-            glm::mat4 identity = glm::mat4(1.0f);
+            glm::mat4 identity = glm::mat4{1.0f};
             PushConstants pcs{
                 .model = identity,
                 .textureIndex = TextureIndex::None
@@ -1390,11 +1504,33 @@ private:
         } else {
             ImGui::TextColored(ImVec4(0.3f, 1.f, 0.4f, 1.f), "MODE: BALL CONTROL MODE [TAB to switch]");
             ImGui::Text("Ball Pos: %.3f / %.3f / %.3f", ballPos.x, ballPos.y, ballPos.z);
-            ImGui::Text("Ball Speed: %.2f m/s", glm::length(glm::vec3(ballVel.x, 0.f, ballVel.z)));
-            ImGui::Text("Controls: WASD=Roll Ball, Mouse=Orbit Camera, Space=Jump");
+            ImGui::Text("Ball Speed: %.2f m/s", glm::length(glm::vec3{ballVel.x, 0.f, ballVel.z}));
+            ImGui::Text("Controls: WASD=Roll Ball, Mouse=Orbit Camera, Space=Jump, R=Restart");
         }
         ImGui::Text("Facing: %.1f / %.1f (Yaw / Pitch)", displayYaw, pitch);
         ImGui::End();
+
+        if (hasWon) {
+            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(swapChainExtent.width) * 0.5f - 150.f,
+                                           static_cast<float>(swapChainExtent.height) * 0.5f - 100.f),
+                                    ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(300.f, 200.f));
+            ImGui::Begin("Victory!", nullptr,
+                         ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoMove);
+            ImGui::TextColored(ImVec4(0.1f, 1.f, 0.1f, 1.f), "YOU REACHED THE GOAL!");
+            ImGui::Separator();
+            ImGui::Text("Nice roll!");
+            ImGui::Spacing();
+            if (ImGui::Button("Play Again [R]", ImVec2(284.f, 40.f))) {
+                ballPos = glm::vec3{0.f, 2.f, 0.f};
+                ballVel = glm::vec3{0.f};
+                ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
+                hasWon = false;
+            }
+            ImGui::End();
+        }
 
         ImGui::Render();
 
@@ -1436,73 +1572,119 @@ private:
         frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-    void simulateBallPhysics(const float deltaTime, const glm::vec3 force = glm::vec3(0.f)) {
+    void simulateBallPhysics(const float deltaTime, const glm::vec3 force = glm::vec3{0.f}) {
         // Gravity
         constexpr float gravity = -9.81f;
-        const glm::vec3 acc = force + glm::vec3(0.f, gravity, 0.f);
+        const glm::vec3 acc = force + glm::vec3{0.f, gravity, 0.f};
 
         // Update velocity
         ballVel += acc * deltaTime;
 
-        // Apply ground friction/damping on the ground
-        constexpr float planeY = -1.f;
-        constexpr float ballRadius = 1.f;
-        const bool onGround = (ballPos.y <= planeY + ballRadius + 0.001f);
+        // Perform collision detection and resolution with all platforms
+        bool onGround = false;
+        constexpr float ballRadius = 1.0f;
 
+        for (const auto &platform: platforms) {
+            // Construct the rotation matrix of the platform
+            glm::quat qx = glm::angleAxis(platform.rotation.x, glm::vec3{1.0f, 0.0f, 0.0f});
+            glm::quat qy = glm::angleAxis(platform.rotation.y, glm::vec3{0.0f, 1.0f, 0.0f});
+            glm::quat qz = glm::angleAxis(platform.rotation.z, glm::vec3{0.0f, 0.0f, 1.0f});
+            glm::quat q = qz * qy * qx;
+            glm::mat3 R = glm::mat3_cast(q);
+
+            // Transform ball position to local space
+            glm::vec3 relativePos = ballPos - platform.position;
+            glm::vec3 localPos = glm::transpose(R) * relativePos;
+
+            // Clamp local position to box half-extents
+            glm::vec3 halfSize = platform.size * 0.5f;
+            glm::vec3 closestLocal = glm::clamp(localPos, -halfSize, halfSize);
+
+            // Distance in local space
+            glm::vec3 diff = localPos - closestLocal;
+            float dist = glm::length(diff);
+
+            if (dist < ballRadius) {
+                // Collision detected!
+                glm::vec3 normalLocal;
+                float penetration;
+
+                if (dist > 0.0001f) {
+                    normalLocal = diff / dist;
+                    penetration = ballRadius - dist;
+                } else {
+                    // Center is inside the box, push to the closest face
+                    float dx = halfSize.x - std::abs(localPos.x);
+                    float dy = halfSize.y - std::abs(localPos.y);
+                    float dz = halfSize.z - std::abs(localPos.z);
+
+                    if (dx < dy && dx < dz) {
+                        normalLocal = glm::vec3{localPos.x >= 0.f ? 1.f : -1.f, 0.f, 0.f};
+                        penetration = ballRadius + dx;
+                    } else if (dy < dx && dy < dz) {
+                        normalLocal = glm::vec3{0.f, localPos.y >= 0.f ? 1.f : -1.f, 0.f};
+                        penetration = ballRadius + dy;
+                    } else {
+                        normalLocal = glm::vec3{0.f, 0.f, localPos.z >= 0.f ? 1.f : -1.f};
+                        penetration = ballRadius + dz;
+                    }
+                }
+
+                // Convert normal to world space
+                glm::vec3 normalWorld = R * normalLocal;
+
+                // Push ball out of the platform
+                ballPos += normalWorld * penetration;
+
+                // Adjust velocity
+                float vn = glm::dot(ballVel, normalWorld);
+                if (vn < 0.f) {
+                    constexpr float restitution = 0.15f; // bounce factor
+                    ballVel -= normalWorld * (vn * (1.f + restitution));
+                }
+
+                // Apply platform-specific behavior
+                if (platform.isGoal) {
+                    hasWon = true;
+                }
+
+                // Ground check: if normal points mostly upwards, mark as grounded
+                if (normalWorld.y > 0.5f) {
+                    onGround = true;
+                }
+            }
+        }
+
+        // Apply ground friction or air resistance
         if (onGround) {
-            // Apply ground friction (drag) to horizontal movement
-            constexpr float friction = 2.f;
+            constexpr float friction = 1.2f;
             ballVel.x -= ballVel.x * friction * deltaTime;
             ballVel.z -= ballVel.z * friction * deltaTime;
         } else {
-            // Air resistance
-            constexpr float airResistance = 0.1f;
+            constexpr float airResistance = 0.15f;
             ballVel -= ballVel * airResistance * deltaTime;
         }
 
         // Update position
         ballPos += ballVel * deltaTime;
 
-        // Plane collision resolution
-        if (ballPos.y < planeY + ballRadius) {
-            ballPos.y = planeY + ballRadius;
-            // If dropping down, bounce
-            if (ballVel.y < 0.f) {
-                constexpr float restitution = 0.3f; // bounce factor
-                ballVel.y = -ballVel.y * restitution;
-                if (std::abs(ballVel.y) < 0.2f) {
-                    ballVel.y = 0.f;
-                }
-            }
-        }
-
-        // Keep ball within bounds of the plane
-        constexpr float planeBoundary = 24.5f; // plane is 50x50, so bounds from -25 to 25
-        if (ballPos.x < -planeBoundary) {
-            ballPos.x = -planeBoundary;
-            ballVel.x = -ballVel.x * 0.5f;
-        }
-        if (ballPos.x > planeBoundary) {
-            ballPos.x = planeBoundary;
-            ballVel.x = -ballVel.x * 0.5f;
-        }
-        if (ballPos.z < -planeBoundary) {
-            ballPos.z = -planeBoundary;
-            ballVel.z = -ballVel.z * 0.5f;
-        }
-        if (ballPos.z > planeBoundary) {
-            ballPos.z = planeBoundary;
-            ballVel.z = -ballVel.z * 0.5f;
+        // Keep ball within bounds / fell off resolution
+        if (ballPos.y < -15.f) {
+            // Respawn at start position
+            ballPos = glm::vec3{0.f, 2.f, 0.f};
+            ballVel = glm::vec3{0.f};
+            ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
+            hasWon = false;
         }
 
         // Update visual rotation based on rolling distance
         if (onGround) {
-            const auto velocityOnGround = glm::vec3(ballVel.x, 0.f, ballVel.z);
+            const auto velocityOnGround = glm::vec3{ballVel.x, 0.f, ballVel.z};
             const float speed = glm::length(velocityOnGround);
             if (speed > 0.001f) {
                 const glm::vec3 rollDirection = glm::normalize(velocityOnGround);
                 // Rotation axis is perpendicular to roll direction and up vector (0, 1, 0)
-                const glm::vec3 rotAxis = glm::normalize(glm::cross(glm::vec3(0.f, 1.f, 0.f), rollDirection));
+                const glm::vec3 rotAxis = glm::normalize(glm::cross(glm::vec3{0.f, 1.f, 0.f}, rollDirection));
                 const float rotAngle = (speed * deltaTime) / ballRadius;
                 const glm::quat deltaRot = glm::angleAxis(rotAngle, rotAxis);
                 ballRot = deltaRot * ballRot;
@@ -1620,8 +1802,8 @@ private:
 
             // Control ball with WASD relative to camera rotation on the horizontal plane
             glm::vec3 ballForce{0.f};
-            const glm::vec3 flatForward = glm::normalize(glm::vec3(cameraFront.x, 0.f, cameraFront.z));
-            const glm::vec3 flatRight = glm::normalize(glm::cross(flatForward, glm::vec3(0.f, 1.f, 0.f)));
+            const glm::vec3 flatForward = glm::normalize(glm::vec3{cameraFront.x, 0.f, cameraFront.z});
+            const glm::vec3 flatRight = glm::normalize(glm::cross(flatForward, glm::vec3{0.f, 1.f, 0.f}));
 
             constexpr float forceMagnitude = 20.f; // force applied to move the ball
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
@@ -1641,17 +1823,25 @@ private:
             cameraPos = ballPos - cameraFront * followDistance;
         }
 
+        // Quick restart option
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
+            ballPos = glm::vec3{0.f, 2.f, 0.f};
+            ballVel = glm::vec3{0.f};
+            ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
+            hasWon = false;
+        }
+
         // Sync and update ECS entities
         if (cameraEntity) {
-            if (auto* cameraTransform = cameraEntity->getComponent<TransformComponent>()) {
+            if (auto *cameraTransform = cameraEntity->getComponent<TransformComponent>()) {
                 cameraTransform->setPosition(cameraPos);
-                cameraTransform->setRotation(glm::vec3(glm::radians(pitch), -glm::radians(yaw + 90.f), 0.f));
+                cameraTransform->setRotation(glm::vec3{glm::radians(pitch), -glm::radians(yaw + 90.f), 0.f});
             }
             cameraEntity->update(deltaTime);
         }
 
         if (ballEntity) {
-            if (auto* ballTransform = ballEntity->getComponent<TransformComponent>()) {
+            if (auto *ballTransform = ballEntity->getComponent<TransformComponent>()) {
                 ballTransform->setPosition(ballPos);
                 ballTransform->setRotation(glm::eulerAngles(ballRot));
             }
@@ -1665,11 +1855,11 @@ private:
 
     void updateUniformBuffer() const {
         const float aspect = static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height);
-        
+
         glm::mat4 proj;
         glm::mat4 view;
         if (cameraEntity) {
-            if (auto* cameraComp = cameraEntity->getComponent<CameraComponent>()) {
+            if (auto *cameraComp = cameraEntity->getComponent<CameraComponent>()) {
                 cameraComp->setAspectRatio(aspect);
                 proj = cameraComp->getProjectionMatrix();
                 view = cameraComp->getViewMatrix();
@@ -1688,8 +1878,8 @@ private:
         ubo.model = model;
         ubo.view = view;
         ubo.proj = proj;
-        ubo.lightDir = glm::vec4(1.f, 1.f, 1.f, 0.f);
-        ubo.baseColor = glm::vec4(0.8f, 0.2f, 0.2f, 1.f);
+        ubo.lightDir = glm::vec4{1.f, 1.f, 1.f, 0.f};
+        ubo.baseColor = glm::vec4{0.8f, 0.2f, 0.2f, 1.f};
 
         *static_cast<CameraUBO *>(uniformBuffersMapped[frameIndex]) = ubo;
     }
@@ -1899,24 +2089,24 @@ private:
                 const float y = cosTheta;
                 const float z = std::sin(phi) * sinTheta;
 
-                const glm::vec3 position = glm::vec3(x * radius, y * radius, z * radius);
-                const glm::vec3 normal = glm::vec3(x, y, z);
+                const glm::vec3 position = glm::vec3{x * radius, y * radius, z * radius};
+                const glm::vec3 normal = glm::vec3{x, y, z};
                 const glm::vec2 texCoord = glm::vec2(static_cast<float>(s) / static_cast<float>(sectors),
-                                               static_cast<float>(r) / static_cast<float>(rings));
+                                                     static_cast<float>(r) / static_cast<float>(rings));
 
                 // Normalize tangent vector around sphere Y axis
                 glm::vec3 tangent = {-std::sin(phi), 0.f, std::cos(phi)};
                 if (glm::length(tangent) > 0.0001f) {
                     tangent = glm::normalize(tangent);
                 } else {
-                    tangent = glm::vec3(1.f, 0.f, 0.f);
+                    tangent = glm::vec3{1.f, 0.f, 0.f};
                 }
 
                 vertices.push_back(Vertex{
                     .position = position,
                     .normal = normal,
                     .texCoord = texCoord,
-                    .tangent = glm::vec4(tangent, 1.0f)
+                    .tangent = glm::vec4{tangent, 1.0f}
                 });
             }
         }
@@ -1937,6 +2127,99 @@ private:
         }
 
         return {.vertices = std::move(vertices), .indices = std::move(indices)};
+    }
+
+    static GeometryData createBoxGeometry() {
+        GeometryData geom;
+
+        constexpr std::array normals = {
+            glm::vec3{0.f, 0.f, 1.f}, // Front (+Z)
+            glm::vec3{0.f, 0.f, -1.f}, // Back (-Z)
+            glm::vec3{1.f, 0.f, 0.f}, // Right (+X)
+            glm::vec3{-1.f, 0.f, 0.f}, // Left (-X)
+            glm::vec3{0.f, 1.f, 0.f}, // Top (+Y)
+            glm::vec3{0.f, -1.f, 0.f} // Bottom (-Y)
+        };
+
+        constexpr std::array tangents = {
+            glm::vec4{1.f, 0.f, 0.f, 1.f}, // Front
+            glm::vec4{-1.f, 0.f, 0.f, 1.f}, // Back
+            glm::vec4{0.f, 0.f, -1.f, 1.f}, // Right
+            glm::vec4{0.f, 0.f, 1.f, 1.f}, // Left
+            glm::vec4{1.f, 0.f, 0.f, 1.f}, // Top
+            glm::vec4{1.f, 0.f, 0.f, 1.f} // Bottom
+        };
+
+        constexpr std::array positions = {
+            glm::vec3{-0.5f, -0.5f, 0.5f},
+            glm::vec3{0.5f, -0.5f, 0.5f},
+            glm::vec3{0.5f, 0.5f, 0.5f},
+            glm::vec3{-0.5f, 0.5f, 0.5f}
+        };
+
+        constexpr std::array uvs = {
+            glm::vec2{0.f, 0.f},
+            glm::vec2{1.f, 0.f},
+            glm::vec2{1.f, 1.f},
+            glm::vec2{0.f, 1.f}
+        };
+
+        // Front Face (+Z)
+        for (int i = 0; i < 4; ++i) {
+            geom.vertices.push_back({positions[i], normals[0], uvs[i], tangents[0]});
+        }
+        // Back Face (-Z)
+        for (int i = 0; i < 4; ++i) {
+            glm::vec3 p = positions[i];
+            p.z = -p.z;
+            p.x = -p.x;
+            geom.vertices.push_back({p, normals[1], uvs[i], tangents[1]});
+        }
+        // Right Face (+X)
+        for (int i = 0; i < 4; ++i) {
+            glm::vec3 p = positions[i];
+            float tmp = p.x;
+            p.x = p.z;
+            p.z = -tmp;
+            geom.vertices.push_back({p, normals[2], uvs[i], tangents[2]});
+        }
+        // Left Face (-X)
+        for (int i = 0; i < 4; ++i) {
+            glm::vec3 p = positions[i];
+            float tmp = p.x;
+            p.x = -p.z;
+            p.z = tmp;
+            geom.vertices.push_back({p, normals[3], uvs[i], tangents[3]});
+        }
+        // Top Face (+Y)
+        for (int i = 0; i < 4; ++i) {
+            glm::vec3 p = positions[i];
+            float tmp = p.y;
+            p.y = p.z;
+            p.z = -tmp;
+            geom.vertices.push_back({p, normals[4], uvs[i], tangents[4]});
+        }
+        // Bottom Face (-Y)
+        for (int i = 0; i < 4; ++i) {
+            glm::vec3 p = positions[i];
+            float tmp = p.y;
+            p.y = -p.z;
+            p.z = tmp;
+            geom.vertices.push_back({p, normals[5], uvs[i], tangents[5]});
+        }
+
+        // Indices (Counter-Clockwise winding matching Vulkan pipeline frontFace)
+        for (int f = 0; f < 6; ++f) {
+            std::uint32_t base = f * 4;
+            geom.indices.push_back(base + 0);
+            geom.indices.push_back(base + 1);
+            geom.indices.push_back(base + 2);
+            geom.indices.push_back(base + 0);
+            geom.indices.push_back(base + 2);
+            geom.indices.push_back(base + 3);
+        }
+
+        return geom;
     }
 
     static std::vector<char> readFile(const std::string_view filename) {

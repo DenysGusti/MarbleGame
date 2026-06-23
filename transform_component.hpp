@@ -16,7 +16,7 @@ private:
     glm::vec3 scale = {1.0f, 1.0f, 1.0f};
 
     // Mutable allows these cached variables to be modified inside const getter methods
-    mutable glm::mat4 modelMatrix = glm::mat4(1.0f);
+    mutable glm::mat4 modelMatrix = glm::mat4{1.0f};
     mutable bool matrixDirty = true;
 
 public:
@@ -80,18 +80,18 @@ public:
 
 private:
     void updateModelMatrix() const {
-        const glm::mat4 T = glm::translate(glm::mat4(1.0f), position);
+        const glm::mat4 T = glm::translate(glm::mat4{1.0f}, position);
 
         // Compose rotation with quaternions for stability and to avoid rad/deg ambiguity
-        const glm::quat qx = glm::angleAxis(rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
-        const glm::quat qy = glm::angleAxis(rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-        const glm::quat qz = glm::angleAxis(rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        const glm::quat qx = glm::angleAxis(rotation.x, glm::vec3{1.0f, 0.0f, 0.0f});
+        const glm::quat qy = glm::angleAxis(rotation.y, glm::vec3{0.0f, 1.0f, 0.0f});
+        const glm::quat qz = glm::angleAxis(rotation.z, glm::vec3{0.0f, 0.0f, 1.0f});
 
         // ZYX order is conventional for Euler composition
         const glm::quat q = qz * qy * qx;
         const glm::mat4 R = glm::mat4_cast(q);
 
-        const glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
+        const glm::mat4 S = glm::scale(glm::mat4{1.0f}, scale);
 
         modelMatrix = T * R * S;
         matrixDirty = false;
