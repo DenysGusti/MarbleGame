@@ -23,6 +23,10 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include "entity.hpp"
+#include "transform_component.hpp"
+#include "camera_component.hpp"
+
 constexpr std::uint32_t WIDTH = 800;
 constexpr std::uint32_t HEIGHT = 600;
 constexpr std::int32_t MAX_FRAMES_IN_FLIGHT = 2;

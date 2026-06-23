@@ -1,15 +1,51 @@
-#ifndef MARBLE_COMPONENT_HPP
-#define MARBLE_COMPONENT_HPP
+#ifndef MARBLEGAME_COMPONENT_HPP
+#define MARBLEGAME_COMPONENT_HPP
 
-// Abstract base for every component attached to an Entity.
-// Derive from this and override update() to implement behaviour.
+#include <string>
+#include <string_view>
+
+class Entity;
+
 class Component {
+protected:
+    Entity *owner = nullptr;
+    std::string name;
+    bool active = true;
+
 public:
+    explicit Component(const std::string_view componentName = "Component") : name(componentName) {
+    }
+
     virtual ~Component() = default;
 
-    // Called once per game-logic tick. dt is elapsed seconds.
-    virtual void update(const float dt) {
+    virtual void initialize() {
+    }
+
+    virtual void update(const float deltaTime) {
+    }
+
+    virtual void render() const {
+    }
+
+    void setOwner(Entity *targetEntity) {
+        owner = targetEntity;
+    }
+
+    [[nodiscard]] Entity *getOwner() const {
+        return owner;
+    }
+
+    [[nodiscard]] std::string_view getName() const {
+        return name;
+    }
+
+    [[nodiscard]] bool isActive() const {
+        return active;
+    }
+
+    void setActive(const bool isActiveState) {
+        active = isActiveState;
     }
 };
 
-#endif // MARBLE_COMPONENT_HPP
+#endif // MARBLEGAME_COMPONENT_HPP

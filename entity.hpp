@@ -1,45 +1,114 @@
-#ifndef MARBLE_ENTITY_HPP
-#define MARBLE_ENTITY_HPP
+#ifndef MARBLEGAME_ENTITY_HPP
+#define MARBLEGAME_ENTITY_HPP
 
+#include <algorithm>
+#include <concepts>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "component.hpp"
 
-// An actor that owns a heterogeneous bag of Components.
-// unique_ptr makes copy deleted and move generated automatically — no boilerplate needed.
 class Entity {
+private:
+    std::string name;
+    bool active = true;
+
+    std::vector<std::unique_ptr<Component> > components;
+
 public:
-    // Construct a T in-place, forwarding args to its constructor.
-    // Returns a non-owning pointer to the new component.
-    template<typename T, typename... Args>
-        requires std::derived_from<T, Component>
-    [[nodiscard]] T *addComponent(Args &&... args) {
-        auto &ref = m_components.emplace_back(std::make_unique<T>(std::forward<Args>(args)...));
-        return static_cast<T *>(ref.get());
+    explicit Entity(const std::string_view entityName) : name{entityName} {
     }
 
-    // Returns the first component of type T, or nullptr if absent.
+    virtual ~Entity() = default;
+
+    [[nodiscard]] std::string_view getName() const {
+        return name;
+    }
+
+    [[nodiscard]] bool isActive() const {
+        return active;
+    }
+
+    void setActive(const bool isActiveState) {
+        active = isActiveState;
+    }
+
+
+    void initialize() const {
+        for (const auto &component: components) {
+            component->initialize();
+        }
+    }
+
+    void update(const float deltaTime) const {
+        if (!active) {
+            return;
+        }
+
+        for (const auto &component: components) {
+            if (component->isActive()) {
+                component->update(deltaTime);
+            }
+        }
+    }
+
+    void render() const {
+        if (!active) {
+            return;
+        }
+
+        for (const auto &component: components) {
+            if (component->isActive()) {
+                component->render();
+            }
+        }
+    }
+
+    template<typename T, typename... Args>
+        requires std::derived_from<T, Component>
+    T *addComponent(Args &&... args) {
+        auto component = std::make_unique<T>(std::forward<Args>(args)...);
+        T *componentPtr = component.get();
+
+        componentPtr->setOwner(this);
+
+        components.push_back(std::move(component));
+
+        componentPtr->initialize();
+
+        return componentPtr;
+    }
+
     template<typename T>
         requires std::derived_from<T, Component>
-    [[nodiscard]] T *getComponent() const noexcept {
-        for (const auto &c: m_components) {
-            if (auto *p = dynamic_cast<T *>(c.get())) {
-                return p;
+    [[nodiscard]] T *getComponent() const {
+        for (auto it = components.rbegin(); it != components.rend(); ++it) {
+            if (auto *casted = dynamic_cast<T *>(it->get())) {
+                return casted;
             }
         }
         return nullptr;
     }
 
-    // Tick every component in insertion order.
-    void update(const float dt) const {
-        for (const auto &c: m_components) {
-            c->update(dt);
+    template<typename T>
+        requires std::derived_from<T, Component>
+    bool removeComponent() {
+        for (auto it = components.rbegin(); it != components.rend(); ++it) {
+            if (dynamic_cast<T *>(it->get()) != nullptr) {
+                components.erase(std::next(it).base());
+                return true;
+            }
         }
+        return false;
     }
 
-private:
-    std::vector<std::unique_ptr<Component> > m_components;
+    template<typename T>
+        requires std::derived_from<T, Component>
+    [[nodiscard]] bool hasComponent() const {
+        return getComponent<T>() != nullptr;
+    }
 };
 
-#endif // MARBLE_ENTITY_HPP
+#endif // MARBLEGAME_ENTITY_HPP
