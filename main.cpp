@@ -36,25 +36,6 @@ constexpr std::uint32_t HEIGHT = 600;
 constexpr std::int32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 
-struct Vertex {
-    glm::vec3 pos;
-    glm::vec3 normal;
-    glm::vec3 color;
-    glm::vec2 uv;
-
-    static vk::VertexInputBindingDescription getBindingDescription() {
-        return vk::VertexInputBindingDescription{0, sizeof(Vertex), vk::VertexInputRate::eVertex};
-    }
-
-    static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions() {
-        return {
-            vk::VertexInputAttributeDescription{0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
-            vk::VertexInputAttributeDescription{1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
-            vk::VertexInputAttributeDescription{2, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)},
-            vk::VertexInputAttributeDescription{3, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)}
-        };
-    }
-};
 
 struct GeometryData {
     std::vector<Vertex> vertices;
@@ -172,6 +153,33 @@ private:
     double lastY = 300.0;
     bool firstMouse = true;
 
+    // --- ECS Entity/Component State ---
+    std::unique_ptr<Entity> cameraEntity;
+    std::unique_ptr<Entity> ballEntity;
+    std::unique_ptr<Entity> floorEntity;
+
+    void initEntities() {
+        cameraEntity = std::make_unique<Entity>("Camera");
+        auto* cameraTransform = cameraEntity->addComponent<TransformComponent>();
+        cameraTransform->setPosition(cameraPos);
+        cameraTransform->setRotation(glm::vec3(glm::radians(pitch), -glm::radians(yaw + 90.f), 0.f));
+        
+        auto* cameraComp = cameraEntity->addComponent<CameraComponent>();
+        cameraComp->setFieldOfView(45.0f);
+        cameraComp->setAspectRatio(static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height));
+        cameraComp->setClipPlanes(0.1f, 100.0f);
+        cameraComp->initialize();
+
+        ballEntity = std::make_unique<Entity>("Ball");
+        auto* ballTransform = ballEntity->addComponent<TransformComponent>();
+        ballTransform->setPosition(ballPos);
+        ballTransform->setRotation(glm::eulerAngles(ballRot));
+
+        floorEntity = std::make_unique<Entity>("Floor");
+        auto* floorTransform = floorEntity->addComponent<TransformComponent>();
+        floorTransform->setPosition(glm::vec3(0.f, 0.f, 0.f));
+    }
+
     std::vector<const char *> requiredDeviceExtension = {
         vk::KHRSwapchainExtensionName,
         vk::KHRCreateRenderpass2ExtensionName
@@ -218,6 +226,7 @@ private:
         createCommandBuffers();
         createSyncObjects();
         initImgui();
+        initEntities();
     }
 
     void initImgui() {
@@ -717,30 +726,30 @@ private:
             constexpr std::array lineVertices = {
                 // X-axis (Red)
                 Vertex{
-                    .pos = glm::vec3(0.f), .normal = glm::vec3(0, 1, 0), .color = glm::vec3(1.f, 0.f, 0.f),
-                    .uv = glm::vec2(0.f)
+                    .position = glm::vec3(0.f), .normal = glm::vec3(0, 1, 0),
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(1.f, 0.f, 0.f, 1.f)
                 },
                 Vertex{
-                    .pos = glm::vec3(lineLength, 0.f, 0.f), .normal = glm::vec3(0, 1, 0),
-                    .color = glm::vec3(1.f, 0.f, 0.f), .uv = glm::vec2(0.f)
+                    .position = glm::vec3(lineLength, 0.f, 0.f), .normal = glm::vec3(0, 1, 0),
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(1.f, 0.f, 0.f, 1.f)
                 },
                 // Y-axis (Green)
                 Vertex{
-                    .pos = glm::vec3(0.f), .normal = glm::vec3(0, 0, 1), .color = glm::vec3(0.f, 1.f, 0.f),
-                    .uv = glm::vec2(0.f)
+                    .position = glm::vec3(0.f), .normal = glm::vec3(0, 0, 1),
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 1.f, 0.f, 1.f)
                 },
                 Vertex{
-                    .pos = glm::vec3(0.f, lineLength, 0.f), .normal = glm::vec3(0, 0, 1),
-                    .color = glm::vec3(0.f, 1.f, 0.f), .uv = glm::vec2(0.f)
+                    .position = glm::vec3(0.f, lineLength, 0.f), .normal = glm::vec3(0, 0, 1),
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 1.f, 0.f, 1.f)
                 },
                 // Z-axis (Blue)
                 Vertex{
-                    .pos = glm::vec3(0.f), .normal = glm::vec3(1, 0, 0), .color = glm::vec3(0.f, 0.f, 1.f),
-                    .uv = glm::vec2(0.f)
+                    .position = glm::vec3(0.f), .normal = glm::vec3(1, 0, 0),
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 0.f, 1.f, 1.f)
                 },
                 Vertex{
-                    .pos = glm::vec3(0.f, 0.f, lineLength), .normal = glm::vec3(1, 0, 0),
-                    .color = glm::vec3(0.f, 0.f, 1.f), .uv = glm::vec2(0.f)
+                    .position = glm::vec3(0.f, 0.f, lineLength), .normal = glm::vec3(1, 0, 0),
+                    .texCoord = glm::vec2(0.f), .tangent = glm::vec4(0.f, 0.f, 1.f, 1.f)
                 }
             };
 
@@ -766,20 +775,20 @@ private:
             float planeY = -1.f;
             std::vector planeVertices = {
                 Vertex{
-                    .pos = glm::vec3(-planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(0.f, 0.f)
+                    .position = glm::vec3(-planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .texCoord = glm::vec2(0.f, 0.f), .tangent = glm::vec4(0.f)
                 },
                 Vertex{
-                    .pos = glm::vec3(planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(planeSize, 0.f)
+                    .position = glm::vec3(planeSize, planeY, -planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .texCoord = glm::vec2(planeSize, 0.f), .tangent = glm::vec4(0.f)
                 },
                 Vertex{
-                    .pos = glm::vec3(planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(planeSize, planeSize)
+                    .position = glm::vec3(planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .texCoord = glm::vec2(planeSize, planeSize), .tangent = glm::vec4(0.f)
                 },
                 Vertex{
-                    .pos = glm::vec3(-planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
-                    .color = glm::vec3(0.6f, 0.6f, 0.6f), .uv = glm::vec2(0.f, planeSize)
+                    .position = glm::vec3(-planeSize, planeY, planeSize), .normal = glm::vec3(0.f, 1.f, 0.f),
+                    .texCoord = glm::vec2(0.f, planeSize), .tangent = glm::vec4(0.f)
                 }
             };
             std::vector<std::uint32_t> planeIndices = {
@@ -1256,7 +1265,16 @@ private:
 
         // Draw the plane
         {
-            glm::mat4 planeModel = glm::mat4(1.0f);
+            glm::mat4 planeModel;
+            if (floorEntity) {
+                if (auto* floorTransform = floorEntity->getComponent<TransformComponent>()) {
+                    planeModel = floorTransform->getModelMatrix();
+                } else {
+                    planeModel = glm::mat4(1.0f);
+                }
+            } else {
+                planeModel = glm::mat4(1.0f);
+            }
             PushConstants pcs{
                 .model = planeModel,
                 .textureIndex = TextureIndex::Floor
@@ -1271,7 +1289,16 @@ private:
 
         // Draw the sphere
         {
-            glm::mat4 sphereModel = glm::translate(glm::mat4(1.0f), ballPos) * glm::mat4_cast(ballRot);
+            glm::mat4 sphereModel;
+            if (ballEntity) {
+                if (auto* ballTransform = ballEntity->getComponent<TransformComponent>()) {
+                    sphereModel = ballTransform->getModelMatrix();
+                } else {
+                    sphereModel = glm::translate(glm::mat4(1.0f), ballPos) * glm::mat4_cast(ballRot);
+                }
+            } else {
+                sphereModel = glm::translate(glm::mat4(1.0f), ballPos) * glm::mat4_cast(ballRot);
+            }
             PushConstants pcs{
                 .model = sphereModel,
                 .textureIndex = TextureIndex::Ball
@@ -1613,12 +1640,48 @@ private:
             constexpr float followDistance = 6.f;
             cameraPos = ballPos - cameraFront * followDistance;
         }
+
+        // Sync and update ECS entities
+        if (cameraEntity) {
+            if (auto* cameraTransform = cameraEntity->getComponent<TransformComponent>()) {
+                cameraTransform->setPosition(cameraPos);
+                cameraTransform->setRotation(glm::vec3(glm::radians(pitch), -glm::radians(yaw + 90.f), 0.f));
+            }
+            cameraEntity->update(deltaTime);
+        }
+
+        if (ballEntity) {
+            if (auto* ballTransform = ballEntity->getComponent<TransformComponent>()) {
+                ballTransform->setPosition(ballPos);
+                ballTransform->setRotation(glm::eulerAngles(ballRot));
+            }
+            ballEntity->update(deltaTime);
+        }
+
+        if (floorEntity) {
+            floorEntity->update(deltaTime);
+        }
     }
 
     void updateUniformBuffer() const {
         const float aspect = static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height);
-        const glm::mat4 proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 100.f);
-        const glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        
+        glm::mat4 proj;
+        glm::mat4 view;
+        if (cameraEntity) {
+            if (auto* cameraComp = cameraEntity->getComponent<CameraComponent>()) {
+                cameraComp->setAspectRatio(aspect);
+                proj = cameraComp->getProjectionMatrix();
+                view = cameraComp->getViewMatrix();
+            } else {
+                proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 100.f);
+                view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+            }
+        } else {
+            proj = glm::perspective(glm::radians(45.f), aspect, 0.1f, 100.f);
+            view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        }
+
         constexpr glm::mat4 model = glm::mat4{1.f};
 
         CameraUBO ubo{};
@@ -1836,12 +1899,24 @@ private:
                 const float y = cosTheta;
                 const float z = std::sin(phi) * sinTheta;
 
+                const glm::vec3 position = glm::vec3(x * radius, y * radius, z * radius);
+                const glm::vec3 normal = glm::vec3(x, y, z);
+                const glm::vec2 texCoord = glm::vec2(static_cast<float>(s) / static_cast<float>(sectors),
+                                               static_cast<float>(r) / static_cast<float>(rings));
+
+                // Normalize tangent vector around sphere Y axis
+                glm::vec3 tangent = {-std::sin(phi), 0.f, std::cos(phi)};
+                if (glm::length(tangent) > 0.0001f) {
+                    tangent = glm::normalize(tangent);
+                } else {
+                    tangent = glm::vec3(1.f, 0.f, 0.f);
+                }
+
                 vertices.push_back(Vertex{
-                    .pos = glm::vec3(x * radius, y * radius, z * radius),
-                    .normal = glm::vec3(x, y, z),
-                    .color = glm::vec3(1.f, 1.f, 1.f),
-                    .uv = glm::vec2(static_cast<float>(s) / static_cast<float>(sectors),
-                                    static_cast<float>(r) / static_cast<float>(rings))
+                    .position = position,
+                    .normal = normal,
+                    .texCoord = texCoord,
+                    .tangent = glm::vec4(tangent, 1.0f)
                 });
             }
         }

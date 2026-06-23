@@ -18,8 +18,8 @@ Sampler2D floorTex;
 struct VertexInput {
   float3 position : POSITION;
   float3 normal : NORMAL;
-  float3 color : COLOR;
   float2 uv : TEXCOORD;
+  float4 tangent : TANGENT;
 };
 
 // 3. Data passed from Vertex Shader to Fragment Shader
@@ -56,8 +56,12 @@ VertexOutput vertexMain(VertexInput input) {
     output.normal = input.normal;
   }
 
-  // Pass vertex color and texture coordinates
-  output.color = input.color;
+  // Pass vertex color (mapped from tangent for debug lines) and texture coordinates
+  if (pcs.textureIndex != TextureIndex::None) {
+    output.color = float3(1.0, 1.0, 1.0);
+  } else {
+    output.color = input.tangent.xyz;
+  }
   output.uv = input.uv;
 
   return output;

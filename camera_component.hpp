@@ -42,6 +42,9 @@ private:
     mutable bool viewMatrixDirty = true;
     mutable bool projectionMatrixDirty = true;
 
+    mutable glm::vec3 lastPosition = {0.0f, 0.0f, 0.0f};
+    mutable glm::vec3 lastRotation = {0.0f, 0.0f, 0.0f};
+
 public:
     explicit CameraComponent(const std::string_view componentName = "CameraComponent")
         : Component{componentName} {
@@ -116,6 +119,13 @@ public:
     }
 
     [[nodiscard]] const glm::mat4 &getViewMatrix() const {
+        const auto *ownerPtr = getOwner();
+        const auto *transform = ownerPtr ? ownerPtr->getComponent<TransformComponent>() : nullptr;
+        if (transform) {
+            if (transform->getPosition() != lastPosition || transform->getRotation() != lastRotation) {
+                viewMatrixDirty = true;
+            }
+        }
         if (viewMatrixDirty) {
             updateViewMatrix();
         }
@@ -130,7 +140,8 @@ public:
     }
 
     [[nodiscard]] glm::vec3 getPosition() const {
-        const auto *transform = getOwner()->getComponent<TransformComponent>();
+        const auto *ownerPtr = getOwner();
+        const auto *transform = ownerPtr ? ownerPtr->getComponent<TransformComponent>() : nullptr;
         return transform ? transform->getPosition() : glm::vec3(0.0f, 0.0f, 0.0f);
     }
 
@@ -148,12 +159,17 @@ public:
 
 private:
     void updateViewMatrix() const {
-        if (const auto *transformComponent = getOwner()->getComponent<TransformComponent>()) {
+        const auto *ownerPtr = getOwner();
+        const auto *transformComponent = ownerPtr ? ownerPtr->getComponent<TransformComponent>() : nullptr;
+        if (transformComponent) {
             // Build camera world transform (T * R) from the camera entity's transform
             // and compute the view matrix as its inverse. This ensures consistency
             // with rasterization and avoids relying on an external target vector.
             const glm::vec3 position = transformComponent->getPosition();
             const glm::vec3 euler = transformComponent->getRotation(); // radians
+
+            lastPosition = position;
+            lastRotation = euler;
 
             const glm::quat qx = glm::angleAxis(euler.x, glm::vec3(1.0f, 0.0f, 0.0f));
             const glm::quat qy = glm::angleAxis(euler.y, glm::vec3(0.0f, 1.0f, 0.0f));
