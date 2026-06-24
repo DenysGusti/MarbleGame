@@ -134,6 +134,10 @@ private:
     vk::raii::DeviceMemory floorTextureImageMemory = nullptr;
     vk::raii::ImageView floorTextureImageView = nullptr;
 
+    vk::raii::Image goalTextureImage = nullptr;
+    vk::raii::DeviceMemory goalTextureImageMemory = nullptr;
+    vk::raii::ImageView goalTextureImageView = nullptr;
+
     vk::raii::Sampler textureSampler = nullptr;
 
     std::vector<vk::raii::Buffer> uniformBuffers;
@@ -560,6 +564,12 @@ private:
             },
             vk::DescriptorSetLayoutBinding{
                 .binding = 2,
+                .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                .descriptorCount = 1,
+                .stageFlags = vk::ShaderStageFlagBits::eFragment
+            },
+            vk::DescriptorSetLayoutBinding{
+                .binding = 3,
                 .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                 .descriptorCount = 1,
                 .stageFlags = vk::ShaderStageFlagBits::eFragment
@@ -1130,6 +1140,7 @@ private:
     void createTextureImage() {
         createTexture("textures/marble.jpg", ballTextureImage, ballTextureImageMemory, ballTextureImageView);
         createTexture("textures/floor.jpg", floorTextureImage, floorTextureImageMemory, floorTextureImageView);
+        createTexture("textures/goal.jpg", goalTextureImage, goalTextureImageMemory, goalTextureImageView);
     }
 
     void createTextureSampler() {
@@ -1157,7 +1168,7 @@ private:
     void createDescriptorPool() {
         std::array poolSizes{
             vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
-            vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 2}
+            vk::DescriptorPoolSize{vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 3}
         };
         const vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
@@ -1193,6 +1204,11 @@ private:
                 .imageView = *floorTextureImageView,
                 .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
             };
+            vk::DescriptorImageInfo goalImageInfo{
+                .sampler = *textureSampler,
+                .imageView = *goalTextureImageView,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+            };
             std::array descriptorWrites{
                 vk::WriteDescriptorSet{
                     .dstSet = *descriptorSets[i],
@@ -1217,6 +1233,14 @@ private:
                     .descriptorCount = 1,
                     .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                     .pImageInfo = &floorImageInfo
+                },
+                vk::WriteDescriptorSet{
+                    .dstSet = *descriptorSets[i],
+                    .dstBinding = 3,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                    .pImageInfo = &goalImageInfo
                 }
             };
             device.updateDescriptorSets(descriptorWrites, {});
@@ -1375,7 +1399,8 @@ private:
 
             PushConstants pcs{
                 .model = t->getModelMatrix(),
-                .textureIndex = p->isGoal() ? TextureIndex::Ball : TextureIndex::Floor
+                .size = t->getScale(),
+                .textureIndex = p->isGoal() ? TextureIndex::Goal : TextureIndex::Floor,
             };
             commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
                                                        vk::ShaderStageFlagBits::eVertex |
@@ -1399,7 +1424,8 @@ private:
             }
             PushConstants pcs{
                 .model = sphereModel,
-                .textureIndex = TextureIndex::Ball
+                .size = glm::vec3{1.0f, 1.0f, 1.0f},
+                .textureIndex = TextureIndex::Ball,
             };
             commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
                                                        vk::ShaderStageFlagBits::eVertex |

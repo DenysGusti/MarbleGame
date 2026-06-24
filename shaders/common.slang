@@ -4,6 +4,7 @@
 enum TextureIndex : int {
   Ball = 0,
   Floor = 1,
+  Goal = 2,
   None = -1
 };
 
@@ -16,11 +17,9 @@ struct CameraUBO {
 };
 
 struct PushConstants {
-  float4x4 model;
-  TextureIndex textureIndex;
-  int pad0;
-  int pad1;
-  int pad2;
+  float4x4 model;           // Takes 64 bytes
+  float3 size;             // Takes 12 bytes
+  TextureIndex textureIndex; // Takes 4 bytes
 };
 
 #endif // COMMON_SLANG

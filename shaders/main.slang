@@ -13,6 +13,8 @@ PushConstants pcs;
 Sampler2D ballTex;
 [[vk::binding(2, 0)]]
 Sampler2D floorTex;
+[[vk::binding(3, 0)]]
+Sampler2D goalTex;
 
 // 2. Vertex Input matching the C++ Vertex struct
 struct VertexInput {
@@ -46,6 +48,32 @@ VertexOutput vertexMain(VertexInput input) {
     output.viewPos = viewPos4.xyz;
     output.normal =
         mul((float3x3)ubo.view, mul((float3x3)pcs.model, input.normal));
+
+    output.color = float3(1.0, 1.0, 1.0);
+
+    // --- UV SCALING LOGIC ---
+    // Calculate UV scale based on the local face normal
+    float2 uvScale = float2(1.0, 1.0);
+    if (abs(input.normal.x) > 0.5) {
+      // Left/Right faces: scale based on Depth (Z) and Height (Y)
+      uvScale = float2(pcs.size.z, pcs.size.y);
+    } else if (abs(input.normal.y) > 0.5) {
+      // Top/Bottom faces: scale based on Width (X) and Depth (Z)
+      uvScale = float2(pcs.size.x, pcs.size.z);
+    } else {
+      // Front/Back faces: scale based on Width (X) and Height (Y)
+      uvScale = float2(pcs.size.x, pcs.size.y);
+    }
+
+    float textureScaleFactor = 1.0;
+
+    // If it's the floor, make the tiles bigger
+    if (pcs.textureIndex == TextureIndex::Floor || pcs.textureIndex == TextureIndex::Goal) {
+        textureScaleFactor = 0.25;
+    }
+
+    output.uv = input.uv * (uvScale * textureScaleFactor);
+
   } else {
     // Debug lines projection: rotate to view space and offset in front of
     // camera
@@ -54,15 +82,9 @@ VertexOutput vertexMain(VertexInput input) {
     output.position = mul(ubo.proj, float4(viewPos, 1.0));
     output.viewPos = viewPos;
     output.normal = input.normal;
-  }
-
-  // Pass vertex color (mapped from tangent for debug lines) and texture coordinates
-  if (pcs.textureIndex != TextureIndex::None) {
-    output.color = float3(1.0, 1.0, 1.0);
-  } else {
     output.color = input.tangent.xyz;
+    output.uv = input.uv; // No scaling for debug lines
   }
-  output.uv = input.uv;
 
   return output;
 }
@@ -78,6 +100,8 @@ float4 fragmentMain(VertexOutput input) : SV_Target {
     baseColor = ballTex.Sample(input.uv).rgb;
   } else if (pcs.textureIndex == TextureIndex::Floor) {
     baseColor = floorTex.Sample(input.uv).rgb;
+  } else if (pcs.textureIndex == TextureIndex::Goal) {
+    baseColor = goalTex.Sample(input.uv).rgb;
   }
 
   float3 finalColor = baseColor;

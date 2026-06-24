@@ -7,6 +7,7 @@
 enum class TextureIndex : std::int32_t {
     Ball = 0,
     Floor = 1,
+    Goal = 2,
     None = -1
 };
 
@@ -20,10 +21,8 @@ struct CameraUBO {
 
 struct PushConstants {
     glm::mat4 model;
+    glm::vec3 size;
     TextureIndex textureIndex;
-    std::int32_t pad0;
-    std::int32_t pad1;
-    std::int32_t pad2;
 };
 
 #endif // COMMON_HPP

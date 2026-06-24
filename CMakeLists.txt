@@ -79,18 +79,19 @@ target_compile_definitions(MarbleGame PRIVATE
 find_program(SLANGC_EXECUTABLE slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
 set(MAIN_SLANG "${SHADER_DIR}/main.slang")
+set(COMMON_SLANG "${SHADER_DIR}/common.slang")
 set(VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/main_vert.spv")
 set(FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/main_frag.spv")
 
 add_custom_command(
         OUTPUT ${VERT_SPV}
         COMMAND ${SLANGC_EXECUTABLE} ${MAIN_SLANG} -target spirv -entry vertexMain -stage vertex -o ${VERT_SPV}
-        DEPENDS ${MAIN_SLANG}
+        DEPENDS ${MAIN_SLANG} ${COMMON_SLANG}
 )
 add_custom_command(
         OUTPUT ${FRAG_SPV}
         COMMAND ${SLANGC_EXECUTABLE} ${MAIN_SLANG} -target spirv -entry fragmentMain -stage fragment -o ${FRAG_SPV}
-        DEPENDS ${MAIN_SLANG}
+        DEPENDS ${MAIN_SLANG} ${COMMON_SLANG}
 )
 
 add_custom_target(CompileAllShaders DEPENDS ${VERT_SPV} ${FRAG_SPV})
