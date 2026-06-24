@@ -26,6 +26,7 @@
 #include "entity.hpp"
 #include "transform_component.hpp"
 #include "camera_component.hpp"
+#include "platform_component.hpp"
 #include "vertex.hpp"
 
 constexpr std::uint32_t WIDTH = 800;
@@ -111,15 +112,7 @@ private:
     vk::raii::Buffer boxIndexBuffer = nullptr;
     vk::raii::DeviceMemory boxIndexBufferMemory = nullptr;
 
-    struct Platform {
-        glm::vec3 position;
-        glm::vec3 size;
-        glm::vec3 rotation; // Euler angles in radians
-        bool isGoal = false;
-        std::string name;
-    };
-
-    std::vector<Platform> platforms;
+    std::vector<std::unique_ptr<Entity> > platformEntities;
     bool hasWon = false;
     bool hasLost = false;
     bool lostByFalling = false; // true when loss was caused by falling off
@@ -173,7 +166,17 @@ private:
     // --- ECS Entity/Component State ---
     std::unique_ptr<Entity> cameraEntity;
     std::unique_ptr<Entity> ballEntity;
-    std::unique_ptr<Entity> floorEntity;
+
+    void addPlatform(const glm::vec3 &position, const glm::vec3 &size, const glm::vec3 &rotation,
+                     const bool isGoal = false, const std::string_view name = "") {
+        auto entity = std::make_unique<Entity>(name);
+        auto *t = entity->addComponent<TransformComponent>();
+        t->setPosition(position);
+        t->setRotation(rotation);
+        t->setScale(size);
+        entity->addComponent<PlatformComponent>(isGoal);
+        platformEntities.push_back(std::move(entity));
+    }
 
     void initEntities() {
         cameraEntity = std::make_unique<Entity>("Camera");
@@ -196,209 +199,53 @@ private:
         ballTransform->setPosition(ballPos);
         ballTransform->setRotation(glm::eulerAngles(ballRot));
 
-        platforms.clear();
+        platformEntities.clear();
         hasWon = false;
         hasLost = false;
         timeRemaining = 20.0f;
 
         // --- 1. START AREA ---
-        platforms.push_back({
-            .position = glm::vec3{0.f, 20.f, 0.f},
-            .size = glm::vec3{10.f, 1.f, 10.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Start Pad"
-        });
+        addPlatform({0.f, 20.f, 0.f}, {10.f, 1.f, 10.f}, {0.f, 0.f, 0.f}, false, "Start Pad");
 
         // The "V" shaped slopes behind the start area
-        platforms.push_back({
-            .position = glm::vec3{-7.f, 21.5f, 0.f},
-            .size = glm::vec3{6.f, 1.f, 10.f},
-            .rotation = glm::vec3{0.f, 0.f, glm::radians(-30.f)},
-            .name = "Start Left Slope"
-        });
-        platforms.push_back({
-            .position = glm::vec3{7.f, 21.5f, 0.f},
-            .size = glm::vec3{6.f, 1.f, 10.f},
-            .rotation = glm::vec3{0.f, 0.f, glm::radians(30.f)},
-            .name = "Start Right Slope"
-        });
+        addPlatform({-7.f, 21.5f, 0.f}, {6.f, 1.f, 10.f}, {0.f, 0.f, glm::radians(-30.f)}, false, "Start Left Slope");
+        addPlatform({7.f, 21.5f, 0.f}, {6.f, 1.f, 10.f}, {0.f, 0.f, glm::radians(30.f)}, false, "Start Right Slope");
 
         // Initial Drop
-        platforms.push_back({
-            .position = glm::vec3{0.f, 18.5f, 8.f},
-            .size = glm::vec3{10.f, 1.f, 7.f},
-            .rotation = glm::vec3{glm::radians(25.f), 0.f, 0.f},
-            .name = "Initial Drop"
-        });
-
+        addPlatform({0.f, 18.5f, 8.f}, {10.f, 1.f, 7.f}, {glm::radians(25.f), 0.f, 0.f}, false, "Initial Drop");
         // Pre-Twin Ramps Landing
-        platforms.push_back({
-            .position = glm::vec3{0.f, 17.f, 13.f},
-            .size = glm::vec3{10.f, 1.f, 4.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Pre-Twin Landing"
-        });
+        addPlatform({0.f, 17.f, 13.f}, {10.f, 1.f, 4.f}, {0.f, 0.f, 0.f}, false, "Pre-Twin Landing");
 
         // --- 2. TWIN RAMPS WITH RAILS ---
-        // Left Ramp
-        platforms.push_back({
-            .position = glm::vec3{-3.f, 15.5f, 19.f},
-            .size = glm::vec3{3.f, 1.f, 10.f},
-            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
-            .name = "Left Twin Ramp"
-        });
-        // Left Ramp Outer Rail (Red bumper in the image)
-        platforms.push_back({
-            .position = glm::vec3{-4.8f, 16.f, 19.f},
-            .size = glm::vec3{0.6f, 1.5f, 10.f},
-            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
-            .name = "Left Rail"
-        });
-
-        // Right Ramp
-        platforms.push_back({
-            .position = glm::vec3{3.f, 15.5f, 19.f},
-            .size = glm::vec3{3.f, 1.f, 10.f},
-            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
-            .name = "Right Twin Ramp"
-        });
-        // Right Ramp Outer Rail
-        platforms.push_back({
-            .position = glm::vec3{4.8f, 16.f, 19.f},
-            .size = glm::vec3{0.6f, 1.5f, 10.f},
-            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
-            .name = "Right Rail"
-        });
-
+        addPlatform({-3.f, 15.5f, 19.f}, {3.f, 1.f, 10.f}, {glm::radians(16.7f), 0.f, 0.f}, false, "Left Twin Ramp");
+        addPlatform({-4.8f, 16.f, 19.f}, {0.6f, 1.5f, 10.f}, {glm::radians(16.7f), 0.f, 0.f}, false, "Left Rail");
+        addPlatform({3.f, 15.5f, 19.f}, {3.f, 1.f, 10.f}, {glm::radians(16.7f), 0.f, 0.f}, false, "Right Twin Ramp");
+        addPlatform({4.8f, 16.f, 19.f}, {0.6f, 1.5f, 10.f}, {glm::radians(16.7f), 0.f, 0.f}, false, "Right Rail");
 
         // --- 3. MIDDLE LANDING & PYRAMIDS ---
-        // Top edge of the middle landing
-        platforms.push_back({
-            .position = glm::vec3{0.f, 14.f, 25.f},
-            .size = glm::vec3{12.f, 1.f, 3.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Middle Landing Top"
-        });
-
-        // Side bridges (leaving a gap in the center and edges)
-        platforms.push_back({
-            .position = glm::vec3{-3.5f, 14.f, 28.5f},
-            .size = glm::vec3{5.f, 1.f, 4.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Middle Bridge Left"
-        });
-        platforms.push_back({
-            .position = glm::vec3{3.5f, 14.f, 28.5f},
-            .size = glm::vec3{5.f, 1.f, 4.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Middle Bridge Right"
-        });
-
-        // Pyramids (Diamond-rotated boxes)
-        platforms.push_back({
-            .position = glm::vec3{-2.5f, 14.8f, 28.5f},
-            .size = glm::vec3{2.5f, 2.5f, 2.5f},
-            .rotation = glm::vec3{0.f, glm::radians(45.f), 0.f},
-            .name = "Pyramid 1"
-        });
-        platforms.push_back({
-            .position = glm::vec3{2.5f, 14.8f, 28.5f},
-            .size = glm::vec3{2.5f, 2.5f, 2.5f},
-            .rotation = glm::vec3{0.f, glm::radians(45.f), 0.f},
-            .name = "Pyramid 2"
-        });
-
-        // Bottom edge of the middle landing
-        platforms.push_back({
-            .position = glm::vec3{0.f, 14.f, 32.f},
-            .size = glm::vec3{12.f, 1.f, 3.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Middle Landing Bottom"
-        });
-
+        addPlatform({0.f, 14.f, 25.f}, {12.f, 1.f, 3.f}, {0.f, 0.f, 0.f}, false, "Middle Landing Top");
+        addPlatform({-3.5f, 14.f, 28.5f}, {5.f, 1.f, 4.f}, {0.f, 0.f, 0.f}, false, "Middle Bridge Left");
+        addPlatform({3.5f, 14.f, 28.5f}, {5.f, 1.f, 4.f}, {0.f, 0.f, 0.f}, false, "Middle Bridge Right");
+        addPlatform({-2.5f, 14.8f, 28.5f}, {2.5f, 2.5f, 2.5f}, {0.f, glm::radians(45.f), 0.f}, false, "Pyramid 1");
+        addPlatform({2.5f, 14.8f, 28.5f}, {2.5f, 2.5f, 2.5f}, {0.f, glm::radians(45.f), 0.f}, false, "Pyramid 2");
+        addPlatform({0.f, 14.f, 32.f}, {12.f, 1.f, 3.f}, {0.f, 0.f, 0.f}, false, "Middle Landing Bottom");
 
         // --- 4. STEEP CHUTE ---
-        platforms.push_back({
-            .position = glm::vec3{0.f, 10.f, 38.f},
-            .size = glm::vec3{4.f, 1.f, 11.5f},
-            .rotation = glm::vec3{glm::radians(40.f), 0.f, 0.f},
-            .name = "Steep Chute"
-        });
-
+        addPlatform({0.f, 10.f, 38.f}, {4.f, 1.f, 11.5f}, {glm::radians(40.f), 0.f, 0.f}, false, "Steep Chute");
 
         // --- 5. ZIG-ZAG SECTION ---
-        // Catch pad at the bottom of the steep chute
-        platforms.push_back({
-            .position = glm::vec3{0.f, 6.f, 45.f},
-            .size = glm::vec3{6.f, 1.f, 6.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Catch Pad 1"
-        });
-        // Bumper Wall to stop forward momentum from the chute
-        platforms.push_back({
-            .position = glm::vec3{0.f, 7.5f, 48.5f},
-            .size = glm::vec3{6.f, 4.f, 1.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Catch Wall 1"
-        });
-
-        // Ramp turning Right
-        platforms.push_back({
-            .position = glm::vec3{8.f, 5.f, 45.f},
-            .size = glm::vec3{10.f, 1.f, 4.f},
-            .rotation = glm::vec3{0.f, 0.f, glm::radians(-11.3f)},
-            .name = "Zig-Zag Right Ramp"
-        });
-
-        // Second Catch Pad
-        platforms.push_back({
-            .position = glm::vec3{15.f, 4.f, 45.f},
-            .size = glm::vec3{6.f, 1.f, 6.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Catch Pad 2"
-        });
-        // Bumper Wall to stop rightward momentum
-        platforms.push_back({
-            .position = glm::vec3{18.5f, 5.5f, 45.f},
-            .size = glm::vec3{1.f, 4.f, 6.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Catch Wall 2"
-        });
-
-        // Ramp turning Forward again
-        platforms.push_back({
-            .position = glm::vec3{15.f, 2.5f, 52.f},
-            .size = glm::vec3{4.f, 1.f, 10.f},
-            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
-            .name = "Zig-Zag Forward Ramp"
-        });
-
+        addPlatform({0.f, 6.f, 45.f}, {6.f, 1.f, 6.f}, {0.f, 0.f, 0.f}, false, "Catch Pad 1");
+        addPlatform({0.f, 7.5f, 48.5f}, {6.f, 4.f, 1.f}, {0.f, 0.f, 0.f}, false, "Catch Wall 1");
+        addPlatform({8.f, 5.f, 45.f}, {10.f, 1.f, 4.f}, {0.f, 0.f, glm::radians(-11.3f)}, false, "Zig-Zag Right Ramp");
+        addPlatform({15.f, 4.f, 45.f}, {6.f, 1.f, 6.f}, {0.f, 0.f, 0.f}, false, "Catch Pad 2");
+        addPlatform({18.5f, 5.5f, 45.f}, {1.f, 4.f, 6.f}, {0.f, 0.f, 0.f}, false, "Catch Wall 2");
+        addPlatform({15.f, 2.5f, 52.f}, {4.f, 1.f, 10.f}, {glm::radians(16.7f), 0.f, 0.f}, false,
+                    "Zig-Zag Forward Ramp");
 
         // --- 6. GOAL AREA ---
-        // Pre-Goal Landing
-        platforms.push_back({
-            .position = glm::vec3{15.f, 1.f, 59.f},
-            .size = glm::vec3{6.f, 1.f, 6.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Pre-Goal Landing"
-        });
-
-        // Small drop to the goal pad
-        platforms.push_back({
-            .position = glm::vec3{15.f, 0.5f, 64.f},
-            .size = glm::vec3{4.f, 1.f, 6.f},
-            .rotation = glm::vec3{glm::radians(9.5f), 0.f, 0.f},
-            .name = "Final Mini Ramp"
-        });
-
-        // GOAL Platform
-        platforms.push_back({
-            .position = glm::vec3{15.f, 0.f, 71.f},
-            .size = glm::vec3{12.f, 1.f, 10.f},
-            .rotation = glm::vec3{0.f},
-            .isGoal = true,
-            .name = "Goal Pad"
-        });
+        addPlatform({15.f, 1.f, 59.f}, {6.f, 1.f, 6.f}, {0.f, 0.f, 0.f}, false, "Pre-Goal Landing");
+        addPlatform({15.f, 0.5f, 64.f}, {4.f, 1.f, 6.f}, {glm::radians(9.5f), 0.f, 0.f}, false, "Final Mini Ramp");
+        addPlatform({15.f, 0.f, 71.f}, {12.f, 1.f, 10.f}, {0.f, 0.f, 0.f}, true, "Goal Pad");
     }
 
     std::vector<const char *> requiredDeviceExtension = {
@@ -1521,22 +1368,14 @@ private:
         );
 
         // Draw the platforms
-        for (const auto &platform: platforms) {
-            glm::mat4 T = glm::translate(glm::mat4{1.0f}, platform.position);
-
-            glm::quat qx = glm::angleAxis(platform.rotation.x, glm::vec3{1.0f, 0.0f, 0.0f});
-            glm::quat qy = glm::angleAxis(platform.rotation.y, glm::vec3{0.0f, 1.0f, 0.0f});
-            glm::quat qz = glm::angleAxis(platform.rotation.z, glm::vec3{0.0f, 0.0f, 1.0f});
-            glm::quat q = qz * qy * qx;
-            glm::mat4 R = glm::mat4_cast(q);
-
-            glm::mat4 S = glm::scale(glm::mat4{1.0f}, platform.size);
-
-            glm::mat4 modelMatrix = T * R * S;
+        for (const auto &ent: platformEntities) {
+            const auto *t = ent->getComponent<TransformComponent>();
+            const auto *p = ent->getComponent<PlatformComponent>();
+            if (!t || !p) continue;
 
             PushConstants pcs{
-                .model = modelMatrix,
-                .textureIndex = platform.isGoal ? TextureIndex::Ball : TextureIndex::Floor
+                .model = t->getModelMatrix(),
+                .textureIndex = p->isGoal() ? TextureIndex::Ball : TextureIndex::Floor
             };
             commandBuffer.pushConstants<PushConstants>(*pipelineLayout,
                                                        vk::ShaderStageFlagBits::eVertex |
@@ -1773,20 +1612,28 @@ private:
         bool onGround = false;
         constexpr float ballRadius = 1.0f;
 
-        for (const auto &platform: platforms) {
+        for (const auto &ent: platformEntities) {
+            const auto *t = ent->getComponent<TransformComponent>();
+            const auto *p = ent->getComponent<PlatformComponent>();
+            if (!t || !p) continue;
+
+            const glm::vec3 rot = t->getRotation();
+            const glm::vec3 pos = t->getPosition();
+            const glm::vec3 size = t->getScale();
+
             // Construct the rotation matrix of the platform
-            glm::quat qx = glm::angleAxis(platform.rotation.x, glm::vec3{1.0f, 0.0f, 0.0f});
-            glm::quat qy = glm::angleAxis(platform.rotation.y, glm::vec3{0.0f, 1.0f, 0.0f});
-            glm::quat qz = glm::angleAxis(platform.rotation.z, glm::vec3{0.0f, 0.0f, 1.0f});
+            glm::quat qx = glm::angleAxis(rot.x, glm::vec3{1.0f, 0.0f, 0.0f});
+            glm::quat qy = glm::angleAxis(rot.y, glm::vec3{0.0f, 1.0f, 0.0f});
+            glm::quat qz = glm::angleAxis(rot.z, glm::vec3{0.0f, 0.0f, 1.0f});
             glm::quat q = qz * qy * qx;
             glm::mat3 R = glm::mat3_cast(q);
 
             // Transform ball position to local space
-            glm::vec3 relativePos = ballPos - platform.position;
+            glm::vec3 relativePos = ballPos - pos;
             glm::vec3 localPos = glm::transpose(R) * relativePos;
 
             // Clamp local position to box half-extents
-            glm::vec3 halfSize = platform.size * 0.5f;
+            glm::vec3 halfSize = size * 0.5f;
             glm::vec3 closestLocal = glm::clamp(localPos, -halfSize, halfSize);
 
             // Distance in local space
@@ -1833,7 +1680,7 @@ private:
                 }
 
                 // Apply platform-specific behavior
-                if (platform.isGoal) {
+                if (p->isGoal()) {
                     hasWon = true;
                 }
 
@@ -2059,9 +1906,9 @@ private:
             ballEntity->update(deltaTime);
         }
 
-        if (floorEntity) {
-            floorEntity->update(deltaTime);
-        }
+        // Platform entities are static — update handles any future component logic
+        for (const auto &ent: platformEntities)
+            ent->update(deltaTime);
     }
 
     void updateUniformBuffer() const {
