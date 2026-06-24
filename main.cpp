@@ -186,73 +186,212 @@ private:
 
         ballEntity = std::make_unique<Entity>("Ball");
         auto *ballTransform = ballEntity->addComponent<TransformComponent>();
+
+        // Initial spawn position (High up to match the detailed map)
+        ballPos = glm::vec3{0.f, 22.f, 0.f};
         ballTransform->setPosition(ballPos);
         ballTransform->setRotation(glm::eulerAngles(ballRot));
 
-        // Create platforms
         platforms.clear();
         hasWon = false;
 
-        // Platform 1: Start Platform (size: 8x1x8 at origin)
+        // --- 1. START AREA ---
         platforms.push_back({
-            .position = glm::vec3{0.f, -0.5f, 0.f},
-            .size = glm::vec3{8.f, 1.f, 8.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Start Platform"
-        });
-
-        // Platform 2: Straight narrow bridge (size: 3x1x12 at (0, -0.5, 10))
-        platforms.push_back({
-            .position = glm::vec3{0.f, -0.5f, 10.f},
-            .size = glm::vec3{3.f, 1.f, 12.f},
-            .rotation = glm::vec3{0.f},
-            .name = "Narrow Bridge"
-        });
-
-        // Platform 3: Upward Ramp (rising 3 units over 12 units along Z)
-        // angle = atan(3/12) = 14.03 degrees = 0.245 radians.
-        // center position: Z = 16 + 6 = 22, Y = -0.5 + 1.5 = 1.0
-        platforms.push_back({
-            .position = glm::vec3{0.f, 1.0f, 22.f},
-            .size = glm::vec3{4.f, 1.f, 12.f},
-            .rotation = glm::vec3{-glm::radians(14.03f), 0.f, 0.f},
-            .name = "Upward Ramp"
-        });
-
-        // Platform 4: Intermediate Landing (size: 10x1x10 at (0, 2.5, 33))
-        platforms.push_back({
-            .position = glm::vec3{0.f, 2.5f, 33.f},
+            .position = glm::vec3{0.f, 20.f, 0.f},
             .size = glm::vec3{10.f, 1.f, 10.f},
             .rotation = glm::vec3{0.f},
-            .name = "Intermediate Landing"
+            .name = "Start Pad"
         });
 
-        // Platform 5: Right turned path (size: 12x1x3 at (11, 2.5, 33))
+        // The "V" shaped slopes behind the start area
         platforms.push_back({
-            .position = glm::vec3{11.f, 2.5f, 33.f},
+            .position = glm::vec3{-7.f, 21.5f, 0.f},
+            .size = glm::vec3{6.f, 1.f, 10.f},
+            .rotation = glm::vec3{0.f, 0.f, glm::radians(-30.f)},
+            .name = "Start Left Slope"
+        });
+        platforms.push_back({
+            .position = glm::vec3{7.f, 21.5f, 0.f},
+            .size = glm::vec3{6.f, 1.f, 10.f},
+            .rotation = glm::vec3{0.f, 0.f, glm::radians(30.f)},
+            .name = "Start Right Slope"
+        });
+
+        // Initial Drop
+        platforms.push_back({
+            .position = glm::vec3{0.f, 18.5f, 8.f},
+            .size = glm::vec3{10.f, 1.f, 7.f},
+            .rotation = glm::vec3{glm::radians(25.f), 0.f, 0.f},
+            .name = "Initial Drop"
+        });
+
+        // Pre-Twin Ramps Landing
+        platforms.push_back({
+            .position = glm::vec3{0.f, 17.f, 13.f},
+            .size = glm::vec3{10.f, 1.f, 4.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Pre-Twin Landing"
+        });
+
+        // --- 2. TWIN RAMPS WITH RAILS ---
+        // Left Ramp
+        platforms.push_back({
+            .position = glm::vec3{-3.f, 15.5f, 19.f},
+            .size = glm::vec3{3.f, 1.f, 10.f},
+            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
+            .name = "Left Twin Ramp"
+        });
+        // Left Ramp Outer Rail (Red bumper in the image)
+        platforms.push_back({
+            .position = glm::vec3{-4.8f, 16.f, 19.f},
+            .size = glm::vec3{0.6f, 1.5f, 10.f},
+            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
+            .name = "Left Rail"
+        });
+
+        // Right Ramp
+        platforms.push_back({
+            .position = glm::vec3{3.f, 15.5f, 19.f},
+            .size = glm::vec3{3.f, 1.f, 10.f},
+            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
+            .name = "Right Twin Ramp"
+        });
+        // Right Ramp Outer Rail
+        platforms.push_back({
+            .position = glm::vec3{4.8f, 16.f, 19.f},
+            .size = glm::vec3{0.6f, 1.5f, 10.f},
+            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
+            .name = "Right Rail"
+        });
+
+
+        // --- 3. MIDDLE LANDING & PYRAMIDS ---
+        // Top edge of the middle landing
+        platforms.push_back({
+            .position = glm::vec3{0.f, 14.f, 25.f},
             .size = glm::vec3{12.f, 1.f, 3.f},
             .rotation = glm::vec3{0.f},
-            .name = "Right Turn Bridge"
+            .name = "Middle Landing Top"
         });
 
-        // Platform 6: Side-tilted ramp / slope (size: 4x1x16 along X, rising from X=17 to X=33, tilted)
-        // angle = atan(3/16) = 10.6 degrees = 0.185 radians.
-        // rotation is roll (Z rotation) = -10.6 degrees.
-        // center: X = 17 + 8 = 25, Y = 2.5 + 1.5 = 4.0
+        // Side bridges (leaving a gap in the center and edges)
         platforms.push_back({
-            .position = glm::vec3{25.f, 4.0f, 33.f},
-            .size = glm::vec3{16.f, 1.f, 4.f},
-            .rotation = glm::vec3{0.f, 0.f, glm::radians(10.6f)},
-            .name = "Tilted Slope"
+            .position = glm::vec3{-3.5f, 14.f, 28.5f},
+            .size = glm::vec3{5.f, 1.f, 4.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Middle Bridge Left"
+        });
+        platforms.push_back({
+            .position = glm::vec3{3.5f, 14.f, 28.5f},
+            .size = glm::vec3{5.f, 1.f, 4.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Middle Bridge Right"
         });
 
-        // Platform 7: Final platform with Goal (size: 10x1x10 at (38, 5.5, 33))
+        // Pyramids (Diamond-rotated boxes)
         platforms.push_back({
-            .position = glm::vec3{38.f, 5.5f, 33.f},
-            .size = glm::vec3{10.f, 1.f, 10.f},
+            .position = glm::vec3{-2.5f, 14.8f, 28.5f},
+            .size = glm::vec3{2.5f, 2.5f, 2.5f},
+            .rotation = glm::vec3{0.f, glm::radians(45.f), 0.f},
+            .name = "Pyramid 1"
+        });
+        platforms.push_back({
+            .position = glm::vec3{2.5f, 14.8f, 28.5f},
+            .size = glm::vec3{2.5f, 2.5f, 2.5f},
+            .rotation = glm::vec3{0.f, glm::radians(45.f), 0.f},
+            .name = "Pyramid 2"
+        });
+
+        // Bottom edge of the middle landing
+        platforms.push_back({
+            .position = glm::vec3{0.f, 14.f, 32.f},
+            .size = glm::vec3{12.f, 1.f, 3.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Middle Landing Bottom"
+        });
+
+
+        // --- 4. STEEP CHUTE ---
+        platforms.push_back({
+            .position = glm::vec3{0.f, 10.f, 38.f},
+            .size = glm::vec3{4.f, 1.f, 11.5f},
+            .rotation = glm::vec3{glm::radians(40.f), 0.f, 0.f},
+            .name = "Steep Chute"
+        });
+
+
+        // --- 5. ZIG-ZAG SECTION ---
+        // Catch pad at the bottom of the steep chute
+        platforms.push_back({
+            .position = glm::vec3{0.f, 6.f, 45.f},
+            .size = glm::vec3{6.f, 1.f, 6.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Catch Pad 1"
+        });
+        // Bumper Wall to stop forward momentum from the chute
+        platforms.push_back({
+            .position = glm::vec3{0.f, 7.5f, 48.5f},
+            .size = glm::vec3{6.f, 4.f, 1.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Catch Wall 1"
+        });
+
+        // Ramp turning Right
+        platforms.push_back({
+            .position = glm::vec3{8.f, 5.f, 45.f},
+            .size = glm::vec3{10.f, 1.f, 4.f},
+            .rotation = glm::vec3{0.f, 0.f, glm::radians(-11.3f)},
+            .name = "Zig-Zag Right Ramp"
+        });
+
+        // Second Catch Pad
+        platforms.push_back({
+            .position = glm::vec3{15.f, 4.f, 45.f},
+            .size = glm::vec3{6.f, 1.f, 6.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Catch Pad 2"
+        });
+        // Bumper Wall to stop rightward momentum
+        platforms.push_back({
+            .position = glm::vec3{18.5f, 5.5f, 45.f},
+            .size = glm::vec3{1.f, 4.f, 6.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Catch Wall 2"
+        });
+
+        // Ramp turning Forward again
+        platforms.push_back({
+            .position = glm::vec3{15.f, 2.5f, 52.f},
+            .size = glm::vec3{4.f, 1.f, 10.f},
+            .rotation = glm::vec3{glm::radians(16.7f), 0.f, 0.f},
+            .name = "Zig-Zag Forward Ramp"
+        });
+
+
+        // --- 6. GOAL AREA ---
+        // Pre-Goal Landing
+        platforms.push_back({
+            .position = glm::vec3{15.f, 1.f, 59.f},
+            .size = glm::vec3{6.f, 1.f, 6.f},
+            .rotation = glm::vec3{0.f},
+            .name = "Pre-Goal Landing"
+        });
+
+        // Small drop to the goal pad
+        platforms.push_back({
+            .position = glm::vec3{15.f, 0.5f, 64.f},
+            .size = glm::vec3{4.f, 1.f, 6.f},
+            .rotation = glm::vec3{glm::radians(9.5f), 0.f, 0.f},
+            .name = "Final Mini Ramp"
+        });
+
+        // GOAL Platform
+        platforms.push_back({
+            .position = glm::vec3{15.f, 0.f, 71.f},
+            .size = glm::vec3{12.f, 1.f, 10.f},
             .rotation = glm::vec3{0.f},
             .isGoal = true,
-            .name = "Goal Platform"
+            .name = "Goal Pad"
         });
     }
 
@@ -1573,9 +1712,13 @@ private:
     }
 
     void simulateBallPhysics(const float deltaTime, const glm::vec3 force = glm::vec3{0.f}) {
-        // Gravity
-        constexpr float gravity = -9.81f;
-        const glm::vec3 acc = force + glm::vec3{0.f, gravity, 0.f};
+        // 1. Realistic Gravity & High Mass
+        constexpr float gravity = -9.81f; // Standard Earth gravity
+        constexpr float mass = 6.0f; // High mass makes the ball resist WASD inputs
+
+        // Newton's Second Law: Acceleration = Force / Mass
+        // Gravity is applied after because it affects all masses equally
+        const glm::vec3 acc = (force / mass) + glm::vec3{0.f, gravity, 0.f};
 
         // Update velocity
         ballVel += acc * deltaTime;
@@ -1639,7 +1782,7 @@ private:
                 // Adjust velocity
                 float vn = glm::dot(ballVel, normalWorld);
                 if (vn < 0.f) {
-                    constexpr float restitution = 0.15f; // bounce factor
+                    constexpr float restitution = 0.05f; // Slight bounce to prevent getting stuck
                     ballVel -= normalWorld * (vn * (1.f + restitution));
                 }
 
@@ -1655,13 +1798,14 @@ private:
             }
         }
 
-        // Apply ground friction or air resistance
+        // 2. Momentum Preservation
         if (onGround) {
-            constexpr float friction = 1.2f;
+            // Lowered friction: a heavy ball keeps rolling once it has momentum
+            constexpr float friction = 0.35f;
             ballVel.x -= ballVel.x * friction * deltaTime;
             ballVel.z -= ballVel.z * friction * deltaTime;
         } else {
-            constexpr float airResistance = 0.15f;
+            constexpr float airResistance = 0.0f;
             ballVel -= ballVel * airResistance * deltaTime;
         }
 
@@ -1670,8 +1814,8 @@ private:
 
         // Keep ball within bounds / fell off resolution
         if (ballPos.y < -15.f) {
-            // Respawn at start position
-            ballPos = glm::vec3{0.f, 2.f, 0.f};
+            // Respawn at new high start position
+            ballPos = glm::vec3{0.f, 22.f, 0.f};
             ballVel = glm::vec3{0.f};
             ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
             hasWon = false;
@@ -1683,7 +1827,6 @@ private:
             const float speed = glm::length(velocityOnGround);
             if (speed > 0.001f) {
                 const glm::vec3 rollDirection = glm::normalize(velocityOnGround);
-                // Rotation axis is perpendicular to roll direction and up vector (0, 1, 0)
                 const glm::vec3 rotAxis = glm::normalize(glm::cross(glm::vec3{0.f, 1.f, 0.f}, rollDirection));
                 const float rotAngle = (speed * deltaTime) / ballRadius;
                 const glm::quat deltaRot = glm::angleAxis(rotAngle, rotAxis);
@@ -1825,7 +1968,7 @@ private:
 
         // Quick restart option
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-            ballPos = glm::vec3{0.f, 2.f, 0.f};
+            ballPos = glm::vec3{0.f, 22.f, 0.f};
             ballVel = glm::vec3{0.f};
             ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
             hasWon = false;
