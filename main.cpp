@@ -1326,7 +1326,7 @@ private:
 
         constexpr vk::ClearValue clearColorValue{
             .color = vk::ClearColorValue{
-                .float32 = std::array<float, 4>{0.1f, 0.2f, 0.3f, 1.f}
+                .float32 = std::array{0.1f, 0.2f, 0.3f, 1.f}
             }
         };
 
@@ -1438,7 +1438,7 @@ private:
         // Draw debug lines (only in Fly Mode)
         if (!ballControlMode) {
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *linePipeline);
-            glm::mat4 identity = glm::mat4{1.0f};
+            auto identity = glm::mat4{1.0f};
             PushConstants pcs{
                 .model = identity,
                 .textureIndex = TextureIndex::None
