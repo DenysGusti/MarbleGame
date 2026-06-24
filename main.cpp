@@ -121,6 +121,10 @@ private:
 
     std::vector<Platform> platforms;
     bool hasWon = false;
+    bool hasLost = false;
+    bool lostByFalling = false; // true when loss was caused by falling off
+    float timeRemaining = 20.0f; // countdown timer in seconds
+    bool timerStarted = false; // true after the player makes their first move
 
     // --- Control and Physics State ---
     bool ballControlMode = true;
@@ -194,6 +198,8 @@ private:
 
         platforms.clear();
         hasWon = false;
+        hasLost = false;
+        timeRemaining = 20.0f;
 
         // --- 1. START AREA ---
         platforms.push_back({
@@ -1646,14 +1652,21 @@ private:
             ImGui::Text("Ball Speed: %.2f m/s", glm::length(glm::vec3{ballVel.x, 0.f, ballVel.z}));
             ImGui::Text("Controls: WASD=Roll Ball, Mouse=Orbit Camera, Space=Jump, R=Restart");
         }
+        // Timer always visible once started
+        if (timerStarted) {
+            if (timeRemaining <= 5.f)
+                ImGui::TextColored(ImVec4(1.f, 0.15f, 0.15f, 1.f), "TIME: %.1f s", timeRemaining);
+            else
+                ImGui::TextColored(ImVec4(1.f, 0.85f, 0.1f, 1.f), "TIME: %.1f s", timeRemaining);
+        }
         ImGui::Text("Facing: %.1f / %.1f (Yaw / Pitch)", displayYaw, pitch);
         ImGui::End();
 
         if (hasWon) {
             ImGui::SetNextWindowPos(ImVec2(static_cast<float>(swapChainExtent.width) * 0.5f - 150.f,
-                                           static_cast<float>(swapChainExtent.height) * 0.5f - 100.f),
+                                           static_cast<float>(swapChainExtent.height) * 0.5f - 110.f),
                                     ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(300.f, 200.f));
+            ImGui::SetNextWindowSize(ImVec2(300.f, 220.f));
             ImGui::Begin("Victory!", nullptr,
                          ImGuiWindowFlags_NoCollapse |
                          ImGuiWindowFlags_NoResize |
@@ -1661,12 +1674,45 @@ private:
             ImGui::TextColored(ImVec4(0.1f, 1.f, 0.1f, 1.f), "YOU REACHED THE GOAL!");
             ImGui::Separator();
             ImGui::Text("Nice roll!");
+            ImGui::Text("Time left: %.1f s", timeRemaining);
             ImGui::Spacing();
             if (ImGui::Button("Play Again [R]", ImVec2(284.f, 40.f))) {
-                ballPos = glm::vec3{0.f, 2.f, 0.f};
+                ballPos = glm::vec3{0.f, 22.f, 0.f};
                 ballVel = glm::vec3{0.f};
                 ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
                 hasWon = false;
+                hasLost = false;
+                lostByFalling = false;
+                timeRemaining = 20.0f;
+                timerStarted = false;
+            }
+            ImGui::End();
+        }
+
+        if (hasLost) {
+            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(swapChainExtent.width) * 0.5f - 150.f,
+                                           static_cast<float>(swapChainExtent.height) * 0.5f - 110.f),
+                                    ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(300.f, 220.f));
+            ImGui::Begin(lostByFalling ? "You Fell!" : "Time's Up!", nullptr,
+                         ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoMove);
+            ImGui::TextColored(ImVec4(1.f, 0.15f, 0.15f, 1.f),
+                               lostByFalling ? "YOU FELL OFF! YOU LOSE!" : "TIME'S UP! YOU LOSE!");
+            ImGui::Separator();
+            ImGui::Text(lostByFalling ? "Don't fall off the edge!" : "You ran out of time.");
+            ImGui::Text("Press Play Again to retry.");
+            ImGui::Spacing();
+            if (ImGui::Button("Play Again [R]", ImVec2(284.f, 40.f))) {
+                ballPos = glm::vec3{0.f, 22.f, 0.f};
+                ballVel = glm::vec3{0.f};
+                ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
+                hasWon = false;
+                hasLost = false;
+                lostByFalling = false;
+                timeRemaining = 20.0f;
+                timerStarted = false;
             }
             ImGui::End();
         }
@@ -1812,21 +1858,19 @@ private:
         // Update position
         ballPos += ballVel * deltaTime;
 
-        // Keep ball within bounds / fell off resolution
+        // Ball fell off — trigger loss instead of respawning
         if (ballPos.y < -15.f) {
-            // Respawn at new high start position
-            ballPos = glm::vec3{0.f, 22.f, 0.f};
-            ballVel = glm::vec3{0.f};
-            ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
-            hasWon = false;
+            ballVel = glm::vec3{0.f}; // freeze the ball
+            hasLost = true;
+            lostByFalling = true;
         }
 
-        // Update visual rotation based on rolling distance
-        if (onGround) {
-            const auto velocityOnGround = glm::vec3{ballVel.x, 0.f, ballVel.z};
-            const float speed = glm::length(velocityOnGround);
+        // Update visual rotation based on velocity — always, including while airborne
+        {
+            const auto horizontalVel = glm::vec3{ballVel.x, 0.f, ballVel.z};
+            const float speed = glm::length(horizontalVel);
             if (speed > 0.001f) {
-                const glm::vec3 rollDirection = glm::normalize(velocityOnGround);
+                const glm::vec3 rollDirection = glm::normalize(horizontalVel);
                 const glm::vec3 rotAxis = glm::normalize(glm::cross(glm::vec3{0.f, 1.f, 0.f}, rollDirection));
                 const float rotAngle = (speed * deltaTime) / ballRadius;
                 const glm::quat deltaRot = glm::angleAxis(rotAngle, rotAxis);
@@ -1847,6 +1891,15 @@ private:
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
         tabPressedLast = tabPressed;
+
+        // Countdown timer — starts on first player move, then runs in any mode
+        if (timerStarted && !hasWon && !hasLost) {
+            timeRemaining -= deltaTime;
+            if (timeRemaining <= 0.f) {
+                timeRemaining = 0.f;
+                hasLost = true;
+            }
+        }
 
         if (!ballControlMode) {
             // --- FLY MODE INPUTS ---
@@ -1903,8 +1956,9 @@ private:
             if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
                 cameraPos -= cameraUp * velocity;
 
-            // Simulate ball physics passively in fly mode
-            simulateBallPhysics(deltaTime);
+            // Simulate ball physics passively in fly mode (only while game is active)
+            if (!hasWon && !hasLost)
+                simulateBallPhysics(deltaTime);
         } else {
             // --- BALL CONTROL MODE ---
             if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
@@ -1949,17 +2003,27 @@ private:
             const glm::vec3 flatRight = glm::normalize(glm::cross(flatForward, glm::vec3{0.f, 1.f, 0.f}));
 
             constexpr float forceMagnitude = 20.f; // force applied to move the ball
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
                 ballForce += flatForward * forceMagnitude;
-            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+                timerStarted = true;
+            }
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
                 ballForce -= flatForward * forceMagnitude;
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+                timerStarted = true;
+            }
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
                 ballForce -= flatRight * forceMagnitude;
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+                timerStarted = true;
+            }
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
                 ballForce += flatRight * forceMagnitude;
+                timerStarted = true;
+            }
 
 
-            simulateBallPhysics(deltaTime, ballForce);
+            // Only simulate physics while game is still active
+            if (!hasLost && !hasWon)
+                simulateBallPhysics(deltaTime, ballForce);
 
             // Third-person camera follow
             constexpr float followDistance = 6.f;
@@ -1972,6 +2036,10 @@ private:
             ballVel = glm::vec3{0.f};
             ballRot = glm::quat{1.f, 0.f, 0.f, 0.f};
             hasWon = false;
+            hasLost = false;
+            lostByFalling = false;
+            timeRemaining = 20.0f;
+            timerStarted = false;
         }
 
         // Sync and update ECS entities
@@ -2015,7 +2083,7 @@ private:
             view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
         }
 
-        constexpr glm::mat4 model = glm::mat4{1.f};
+        constexpr auto model = glm::mat4{1.f};
 
         CameraUBO ubo{};
         ubo.model = model;
