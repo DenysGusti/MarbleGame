@@ -604,7 +604,7 @@ private:
         vk::PipelineShaderStageCreateInfo fragShaderStageInfo{
             .stage = vk::ShaderStageFlagBits::eFragment, .module = *fragModule, .pName = "main"
         };
-        vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+        const std::array shaderStages = {vertShaderStageInfo, fragShaderStageInfo};
 
         auto bindingDescription = Vertex::getBindingDescription();
         auto attributeDescriptions = Vertex::getAttributeDescriptions();
@@ -689,7 +689,7 @@ private:
         vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
             {
                 .stageCount = 2,
-                .pStages = shaderStages,
+                .pStages = shaderStages.data(),
                 .pVertexInputState = &vertexInputInfo,
                 .pInputAssemblyState = &inputAssembly,
                 .pViewportState = &viewportState,
@@ -728,7 +728,7 @@ private:
                 = {
                     {
                         .stageCount = 2,
-                        .pStages = shaderStages,
+                        .pStages = shaderStages.data(),
                         .pVertexInputState = &vertexInputInfo,
                         .pInputAssemblyState = &lineInputAssembly,
                         .pViewportState = &viewportState,
@@ -1061,11 +1061,11 @@ private:
             };
             cmd.pipelineBarrier2(depSrc);
 
-            const std::array<vk::Offset3D, 2> srcOffsets = {
+            const std::array srcOffsets = {
                 vk::Offset3D{0, 0, 0},
                 vk::Offset3D{mipWidth, mipHeight, 1}
             };
-            const std::array<vk::Offset3D, 2> dstOffsets = {
+            const std::array dstOffsets = {
                 vk::Offset3D{0, 0, 0},
                 vk::Offset3D{mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1}
             };
